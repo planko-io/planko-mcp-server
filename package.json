@@ -1,0 +1,40 @@
+{
+  "name": "planko-mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server for syncing Planko tasks with local Markdown files",
+  "type": "module",
+  "bin": {
+    "planko-mcp-server": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "prepublishOnly": "node -e \"import('./index.js')\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  },
+  "devDependencies": {
+    "vitest": "^3.1.1"
+  },
+  "keywords": [
+    "planko",
+    "mcp",
+    "model-context-protocol",
+    "task-sync",
+    "markdown"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/planko-io/planko-mcp-server"
+  }
+}
