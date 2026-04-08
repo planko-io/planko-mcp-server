@@ -1,6 +1,8 @@
 /**
  * API client for Planko MCP Project Sync endpoints.
  * Uses native fetch (Node 18+).
+ *
+ * All external endpoints require projectId (user-scoped API key, PL012).
  */
 
 const DEFAULT_API_BASE = 'https://planko-426622.ue.r.appspot.com/v1';
@@ -42,29 +44,40 @@ export function createApiClient({ apiKey, apiBase }) {
 
   return {
     /**
-     * GET /mcp-project-sync/status
+     * GET /mcp-project-sync/projects — list all projects accessible by the user
      */
-    async status() {
-      return request('GET', '/mcp-project-sync/status');
+    async projects() {
+      return request('GET', '/mcp-project-sync/projects');
     },
 
     /**
-     * GET /mcp-project-sync/pull[?mcpLastSyncDate=...]
+     * GET /mcp-project-sync/status?projectId=...&mcpLastSyncDate=...
      */
-    async pull(mcpLastSyncDate) {
-      const qs =
-        mcpLastSyncDate != null
-          ? `?mcpLastSyncDate=${mcpLastSyncDate}`
-          : '';
-      return request('GET', `/mcp-project-sync/pull${qs}`);
+    async status(projectId, mcpLastSyncDate) {
+      let qs = `projectId=${projectId}`;
+      if (mcpLastSyncDate != null) {
+        qs += `&mcpLastSyncDate=${mcpLastSyncDate}`;
+      }
+      return request('GET', `/mcp-project-sync/status?${qs}`);
+    },
+
+    /**
+     * GET /mcp-project-sync/pull?projectId=...&mcpLastSyncDate=...
+     */
+    async pull(projectId, mcpLastSyncDate) {
+      let qs = `projectId=${projectId}`;
+      if (mcpLastSyncDate != null) {
+        qs += `&mcpLastSyncDate=${mcpLastSyncDate}`;
+      }
+      return request('GET', `/mcp-project-sync/pull?${qs}`);
     },
 
     /**
      * POST /mcp-project-sync/push
      */
-    async push(userEmail, tasks) {
+    async push(projectId, tasks) {
       return request('POST', '/mcp-project-sync/push', {
-        userEmail,
+        projectId,
         tasks,
       });
     },

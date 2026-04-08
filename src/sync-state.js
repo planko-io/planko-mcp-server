@@ -1,61 +1,74 @@
 /**
  * Sync state management for planko-mcp-server.
  *
- * The sync state file (planko-mcp-sync.json) stores:
- * - project metadata (id, name, mcpSyncDate)
- * - task state mappings (id <-> filename, sync timestamps)
- * - last sync date
+ * Two types of state:
+ * 1. Global config (~/.planko-mcp/config.json) — maps project names to folders
+ * 2. Per-folder sync state (planko-mcp-sync.json) — task mappings and timestamps
  *
- * It NEVER stores API keys or credentials.
- *
- * Task names are stored WITHOUT the .md extension. toFileName() adds .md
- * for local file operations. The API receives the bare name.
+ * Credentials are NEVER written to any state file.
+ * Task names are stored WITHOUT the .md extension.
  */
 
-import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, unlinkSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { homedir } from 'node:os';
 
 export const SYNC_FILE = 'planko-mcp-sync.json';
+export const CONFIG_DIR = join(homedir(), '.planko-mcp');
+export const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 const IGNORED_FILES = ['.DS_Store', 'Thumbs.db', '.gitkeep'];
 
 export function isIgnoredFile(filename) {
   return IGNORED_FILES.includes(filename) || filename.startsWith('.');
 }
 
-/**
- * Convert a task name to a local filename by appending .md if needed.
- */
+// --- File name / task name conversion ---
+
 export function toFileName(name) {
   if (!name) return null;
   return name.endsWith('.md') ? name : `${name}.md`;
 }
 
-/**
- * Extract the bare task name from a filename by stripping the .md extension.
- */
 export function toTaskName(fileName) {
   if (!fileName) return null;
   return fileName.endsWith('.md') ? fileName.slice(0, -3) : fileName;
 }
 
-/**
- * Read the sync state file from a folder. Returns null if not found.
- */
+// --- Global config (multi-folder) ---
+
+export function readConfig() {
+  if (!existsSync(CONFIG_FILE)) return { projects: {} };
+  try {
+    const raw = JSON.parse(readFileSync(CONFIG_FILE, 'utf-8'));
+    // Strip any accidentally-stored credentials
+    delete raw.apiKey;
+    return raw;
+  } catch {
+    return { projects: {} };
+  }
+}
+
+export function writeConfig(config) {
+  const safe = { ...config };
+  delete safe.apiKey;
+  if (!existsSync(CONFIG_DIR)) {
+    mkdirSync(CONFIG_DIR, { recursive: true });
+  }
+  writeFileSync(CONFIG_FILE, JSON.stringify(safe, null, 2));
+}
+
+// --- Per-folder sync state ---
+
 export function readSyncState(folder) {
   const syncPath = join(folder, SYNC_FILE);
   if (!existsSync(syncPath)) return null;
   const raw = JSON.parse(readFileSync(syncPath, 'utf-8'));
-  // Strip any accidentally-stored credentials (defensive)
   delete raw.apiKey;
   delete raw.userEmail;
   return raw;
 }
 
-/**
- * Write the sync state file. Ensures no API key is ever persisted.
- */
 export function writeSyncState(folder, data) {
-  // Defensive: never write credentials
   const safe = { ...data };
   delete safe.apiKey;
   delete safe.apiSecret;
@@ -64,51 +77,21 @@ export function writeSyncState(folder, data) {
   writeFileSync(join(folder, SYNC_FILE), JSON.stringify(safe, null, 2));
 }
 
-/**
- * Create a fresh sync state from API status response.
- */
-export function createSyncState(statusData, folder) {
-  const tasks = (statusData.tasks || []).map((t) => ({
-    _id: t._id,
-    mcpSyncDate: t.mcpSyncDate || null,
-    fileName: toFileName(t.name),
-    name: t.name,
-    mcpLastLocalUpdate: null,
-  }));
-
-  const existingFileNames = new Set(
-    tasks.filter((t) => t.fileName).map((t) => t.fileName)
-  );
-
-  const localFiles = listLocalFiles(folder);
-  for (const fname of localFiles) {
-    if (!existingFileNames.has(fname)) {
-      tasks.push({
-        _id: null,
-        mcpSyncDate: null,
-        fileName: fname,
-        name: toTaskName(fname),
-        mcpLastLocalUpdate: null,
-      });
-    }
-  }
-
+export function createSyncState(projectId, projectName) {
   return {
     project: {
-      _id: statusData.project?._id || null,
-      name: statusData.project?.name || null,
-      mcpSyncDate: statusData.project?.mcpSyncDate || null,
+      _id: projectId,
+      name: projectName,
     },
     mcpLastSyncDate: null,
     mcpLastSyncPullChanges: [],
     mcpLastSyncPushChanges: [],
-    tasks,
+    tasks: [],
   };
 }
 
-/**
- * List local .md files in a folder, excluding sync file and ignored files.
- */
+// --- Local file operations ---
+
 export function listLocalFiles(folder) {
   if (!existsSync(folder)) return [];
   return readdirSync(folder).filter((f) => {
@@ -119,16 +102,21 @@ export function listLocalFiles(folder) {
   });
 }
 
-/**
- * Get file modification time in milliseconds.
- */
 export function getFileMtimeMs(filePath) {
   return statSync(filePath).mtimeMs;
 }
 
-/**
- * Build task indexes for quick lookup.
- */
+export function deleteLocalFile(folder, fileName) {
+  const filePath = join(folder, fileName);
+  if (existsSync(filePath)) {
+    unlinkSync(filePath);
+    return true;
+  }
+  return false;
+}
+
+// --- Index helpers ---
+
 export function buildIndexes(tasks) {
   const byId = {};
   const byFileName = {};

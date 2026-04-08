@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -7,6 +7,7 @@ import {
   writeSyncState,
   createSyncState,
   listLocalFiles,
+  deleteLocalFile,
   toFileName,
   toTaskName,
   buildIndexes,
@@ -52,14 +53,10 @@ describe('toTaskName', () => {
   });
 
   it('prevents .md.md corruption', () => {
-    // This is the key fix: toTaskName strips .md, toFileName adds it
     const fileName = 'My Task.md';
     const taskName = toTaskName(fileName);
     expect(taskName).toBe('My Task');
-    // When we push to API, we send taskName (no .md)
-    // When we create local file, we use toFileName(taskName)
     expect(toFileName(taskName)).toBe('My Task.md');
-    // No double extension
     expect(toFileName(taskName)).not.toBe('My Task.md.md');
   });
 });
@@ -85,8 +82,7 @@ describe('readSyncState / writeSyncState', () => {
 
   it('reads written sync state', () => {
     const state = {
-      project: { _id: 'p1', name: 'Test', mcpSyncDate: null },
-      userEmail: 'test@example.com',
+      project: { _id: 'p1', name: 'Test' },
       mcpLastSyncDate: 12345,
       tasks: [],
     };
@@ -96,7 +92,7 @@ describe('readSyncState / writeSyncState', () => {
     expect(read.mcpLastSyncDate).toBe(12345);
   });
 
-  it('NEVER stores API key in sync file', () => {
+  it('NEVER stores credentials in sync file', () => {
     const state = {
       project: { _id: 'p1' },
       apiKey: 'SECRET_KEY_123',
@@ -107,32 +103,31 @@ describe('readSyncState / writeSyncState', () => {
     };
     writeSyncState(tempDir, state);
 
-    // Read raw file to verify no credentials
     const raw = readFileSync(join(tempDir, SYNC_FILE), 'utf-8');
     expect(raw).not.toContain('SECRET_KEY_123');
     expect(raw).not.toContain('another_secret');
     expect(raw).not.toContain('super_secret');
+    expect(raw).not.toContain('test@example.com');
     expect(raw).not.toContain('apiKey');
-    expect(raw).not.toContain('apiSecret');
-    expect(raw).not.toContain('password');
+    expect(raw).not.toContain('userEmail');
 
-    // Also verify the parsed result strips credentials
     const read = readSyncState(tempDir);
     expect(read.apiKey).toBeUndefined();
+    expect(read.userEmail).toBeUndefined();
   });
 
-  it('strips apiKey on read even if file was tampered with', () => {
-    // Simulate a tampered file that has apiKey
+  it('strips credentials on read even if file was tampered', () => {
     const tampered = JSON.stringify({
       project: { _id: 'p1' },
       apiKey: 'TAMPERED_KEY',
-      userEmail: 'test@example.com',
+      userEmail: 'hack@test.com',
       tasks: [],
     });
     writeFileSync(join(tempDir, SYNC_FILE), tampered);
 
     const read = readSyncState(tempDir);
     expect(read.apiKey).toBeUndefined();
+    expect(read.userEmail).toBeUndefined();
   });
 });
 
@@ -175,45 +170,31 @@ describe('listLocalFiles', () => {
   });
 });
 
+describe('deleteLocalFile', () => {
+  it('deletes an existing file', () => {
+    writeFileSync(join(tempDir, 'task.md'), 'content');
+    expect(deleteLocalFile(tempDir, 'task.md')).toBe(true);
+    expect(existsSync(join(tempDir, 'task.md'))).toBe(false);
+  });
+
+  it('returns false for nonexistent file', () => {
+    expect(deleteLocalFile(tempDir, 'nonexistent.md')).toBe(false);
+  });
+});
+
 describe('createSyncState', () => {
-  it('creates state from API status response', () => {
-    const statusData = {
-      project: { _id: 'proj1', name: 'My Project', mcpSyncDate: 100 },
-      tasks: [
-        { _id: 't1', name: 'Task One', mcpSyncDate: 200 },
-        { _id: 't2', name: 'Task Two', mcpSyncDate: 300 },
-      ],
-    };
-
-    const state = createSyncState(statusData, tempDir);
+  it('creates state with project info', () => {
+    const state = createSyncState('proj1', 'My Project');
     expect(state.project._id).toBe('proj1');
-    expect(state.tasks).toHaveLength(2);
-    expect(state.tasks[0].name).toBe('Task One');
-    expect(state.tasks[0].fileName).toBe('Task One.md');
-    expect(state.tasks[0]._id).toBe('t1');
+    expect(state.project.name).toBe('My Project');
+    expect(state.tasks).toEqual([]);
+    expect(state.mcpLastSyncDate).toBeNull();
   });
 
-  it('includes local-only files as new tasks', () => {
-    writeFileSync(join(tempDir, 'Local Task.md'), 'content');
-
-    const statusData = {
-      project: { _id: 'proj1' },
-      tasks: [{ _id: 't1', name: 'Remote Task', mcpSyncDate: 100 }],
-    };
-
-    const state = createSyncState(statusData, tempDir);
-    expect(state.tasks).toHaveLength(2);
-
-    const localTask = state.tasks.find((t) => t.name === 'Local Task');
-    expect(localTask).toBeDefined();
-    expect(localTask._id).toBeNull();
-    expect(localTask.fileName).toBe('Local Task.md');
-  });
-
-  it('does not include credentials in created state', () => {
-    const state = createSyncState({ project: {}, tasks: [] }, tempDir);
+  it('does not include credentials', () => {
+    const state = createSyncState('proj1', 'Test');
     expect(state.apiKey).toBeUndefined();
-    expect(state.apiSecret).toBeUndefined();
+    expect(state.userEmail).toBeUndefined();
   });
 });
 
