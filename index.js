@@ -462,7 +462,14 @@ server.tool(
           continue;
         }
 
-        const diff = await computeSyncDiff(target.projectId, target.folder, sync);
+        let diff;
+        try {
+          diff = await computeSyncDiff(target.projectId, target.folder, sync);
+        } catch (err) {
+          allLines.push(`--- ${target.name} ---`);
+          allLines.push(`Error: ${err.message}`, '');
+          continue;
+        }
 
         allLines.push(`--- ${target.name} (${target.folder}) ---`);
         allLines.push('');
@@ -538,8 +545,12 @@ server.tool(
 
         allResults.push(`--- ${target.name} (${target.folder}) ---`);
 
-        const results = await executeSync(target.projectId, target.folder, sync);
-        allResults.push(...results);
+        try {
+          const results = await executeSync(target.projectId, target.folder, sync);
+          allResults.push(...results);
+        } catch (err) {
+          allResults.push(`Error: ${err.message}`);
+        }
         allResults.push('');
       }
 
