@@ -17,7 +17,7 @@
   },
   "scripts": {
     "test": "vitest run",
-    "prepublishOnly": "node -e \"import('./index.js')\""
+    "prepublishOnly": "node --check index.js && node --check src/api.js && node --check src/converters.js && node --check src/sync-state.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1"
