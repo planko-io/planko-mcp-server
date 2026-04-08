@@ -14,7 +14,7 @@ MCP server for syncing [Planko](https://planko.io) tasks with local Markdown fil
 
 ### Step 1 — Get your API key
 
-1. Open [planko.io/app/integrations](https://planko.io/app/integrations)
+1. Open [app.planko.io/integrations](https://app.planko.io/integrations)
 2. Find the **Model Context Protocol (MCP)** card
 3. Click **"Ativar"** to generate your API key
 4. Copy the key (you can only see it once — regenerate if you lose it)
@@ -107,7 +107,7 @@ Sync order: delete, pull, push. Local changes overwrite remote on conflict.
 
 | Variable | Required | Description |
 |---|---|---|
-| `PLANKO_API_KEY` | Yes | Your MCP API key from planko.io/app/integrations |
+| `PLANKO_API_KEY` | Yes | Your MCP API key from app.planko.io/integrations |
 | `PLANKO_API_BASE` | No | API base URL override (defaults to production) |
 
 ## How it works
