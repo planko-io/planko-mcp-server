@@ -13,7 +13,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSy
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 
-export const SYNC_FILE = 'planko-mcp-sync.json';
+export const SYNC_FILE = '.planko-mcp-sync.json';
 export const CONFIG_DIR = join(homedir(), '.planko-mcp');
 export const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 const IGNORED_FILES = ['.DS_Store', 'Thumbs.db', '.gitkeep'];
