@@ -5,6 +5,85 @@
  * children instead of flattening them into top-level paragraphs.
  */
 
+// --- HTML entity decoding and tag conversion ---
+
+const HTML_ENTITIES = {
+  '&lt;': '<',
+  '&gt;': '>',
+  '&amp;': '&',
+  '&quot;': '"',
+  '&#39;': "'",
+  '&apos;': "'",
+  '&nbsp;': ' ',
+};
+
+function decodeHtmlEntities(text) {
+  return text.replace(/&(?:lt|gt|amp|quot|#39|apos|nbsp);/g, (match) => HTML_ENTITIES[match] || match);
+}
+
+/**
+ * Convert HTML tags embedded in BlockNote text content to Markdown.
+ * Handles common tags: h1-h6, p, strong, em, code, a, br, ul/ol/li, table.
+ */
+function htmlToMarkdown(html) {
+  let md = html;
+
+  // Headings
+  md = md.replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h[1-6]>/gi, (_, level, content) => {
+    return '#'.repeat(Number(level)) + ' ' + content.trim();
+  });
+
+  // Bold
+  md = md.replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**');
+  md = md.replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '**$1**');
+
+  // Italic
+  md = md.replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '*$1*');
+  md = md.replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '*$1*');
+
+  // Code
+  md = md.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, '`$1`');
+
+  // Links
+  md = md.replace(/<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)');
+
+  // Line breaks
+  md = md.replace(/<br\s*\/?>/gi, '\n');
+
+  // List items
+  md = md.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '- $1');
+
+  // Table conversion (basic)
+  md = md.replace(/<thead>([\s\S]*?)<\/thead>/gi, (_, content) => {
+    const headers = [];
+    content.replace(/<th[^>]*>([\s\S]*?)<\/th>/gi, (_, cell) => {
+      headers.push(cell.trim());
+    });
+    if (headers.length === 0) return '';
+    return '| ' + headers.join(' | ') + ' |\n| ' + headers.map(() => '---').join(' | ') + ' |';
+  });
+  md = md.replace(/<tr[^>]*>([\s\S]*?)<\/tr>/gi, (_, content) => {
+    const cells = [];
+    content.replace(/<td[^>]*>([\s\S]*?)<\/td>/gi, (_, cell) => {
+      cells.push(cell.trim());
+    });
+    if (cells.length === 0) return '';
+    return '\n| ' + cells.join(' | ') + ' |';
+  });
+
+  // Strip remaining tags
+  md = md.replace(/<\/?(?:p|div|span|ul|ol|table|tbody|thead|tr|th|td|section|article|header|footer|nav|main|aside|figure|figcaption|blockquote)[^>]*>/gi, '');
+
+  return md.trim();
+}
+
+/**
+ * Check if text contains HTML tags (after entity decoding).
+ */
+function containsHtmlTags(text) {
+  return /<[a-z][a-z0-9]*[\s>\/]/i.test(text);
+}
+
 // --- BlockNote -> Markdown ---
 
 export function inlineToMarkdown(content) {
@@ -13,6 +92,15 @@ export function inlineToMarkdown(content) {
     .map((item) => {
       let text = item.text || '';
       if (!text) return '';
+
+      // Decode HTML entities first
+      text = decodeHtmlEntities(text);
+
+      // If text contains HTML tags, convert them to Markdown
+      if (containsHtmlTags(text)) {
+        text = htmlToMarkdown(text);
+      }
+
       const s = item.styles || {};
       if (s.code) text = `\`${text}\``;
       if (s.strikethrough) text = `~~${text}~~`;
