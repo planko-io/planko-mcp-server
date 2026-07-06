@@ -5,7 +5,7 @@
  * All external endpoints require projectId (user-scoped API key, PL012).
  */
 
-const DEFAULT_API_BASE = 'https://planko-426622.ue.r.appspot.com/v1';
+const DEFAULT_API_BASE = 'https://api.planko.io/v1';
 
 export function createApiClient({ apiKey, apiBase }) {
   const base = apiBase || process.env.PLANKO_API_BASE || DEFAULT_API_BASE;

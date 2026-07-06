@@ -29,7 +29,7 @@ Build an **open, publishable MCP server** (`planko-mcp-server` on npm) that any 
 
 Move these from `scripts/planko-mcp-sync.js` into ESM modules inside the package. All modules use native `fetch` instead of the POC's `http`/`https` dual-module pattern (available since Node 18).
 
-- **`src/api.js`** — API client using `fetch`, API_BASE defaults to `https://planko-426622.ue.r.appspot.com/v1` (configurable via env)
+- **`src/api.js`** — API client using `fetch`, API_BASE defaults to `https://api.planko.io/v1` (configurable via env)
 - **`src/converters.js`** — BlockNote-Markdown conversion (`blockNoteToMarkdown`, `markdownToBlockNote`, and helpers)
   - **Fix from POC**: `markdownToBlockNote` must handle indented lines as nested children (the POC flattens them into paragraphs, causing nesting loss on round-trip pull→push→pull)
 - **`src/sync-state.js`** — read/write `planko-mcp-sync.json`, file scanning, mtime tracking
@@ -93,7 +93,7 @@ Users configure via **environment variables** passed through the MCP server conf
 
 - `PLANKO_API_KEY` — project API key (from Planko UI). **Required** (via env or `planko_setup`)
 - `PLANKO_EMAIL` — user email for task attribution. **Required** (via env or `planko_setup`)
-- `PLANKO_API_BASE` — optional, defaults to `https://planko-426622.ue.r.appspot.com/v1`
+- `PLANKO_API_BASE` — optional, defaults to `https://api.planko.io/v1`
 - `PLANKO_SYNC_FOLDER` — **Required**. Absolute path to the local folder where `.md` task files are synced. The server will refuse to start if this is not set.
 
 ## Step 6 — Installation & registration
