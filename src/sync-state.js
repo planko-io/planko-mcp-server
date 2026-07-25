@@ -77,8 +77,8 @@ export function writeSyncState(folder, data) {
   writeFileSync(join(folder, SYNC_FILE), JSON.stringify(safe, null, 2));
 }
 
-export function createSyncState(projectId, projectName) {
-  return {
+export function createSyncState(projectId, projectName, syncType) {
+  const state = {
     project: {
       _id: projectId,
       name: projectName,
@@ -88,6 +88,11 @@ export function createSyncState(projectId, projectName) {
     mcpLastSyncPushChanges: [],
     tasks: [],
   };
+  // syncType: 1 = tasks, 2 = notes. Omitted (undefined) => legacy type-agnostic sync.
+  if (syncType === 1 || syncType === 2) {
+    state.syncType = syncType;
+  }
+  return state;
 }
 
 // --- Local file operations ---

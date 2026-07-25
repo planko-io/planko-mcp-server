@@ -4,10 +4,12 @@ MCP server for syncing [Planko](https://planko.io) tasks with local Markdown fil
 
 ## Features
 
-- **3 tools**: setup, sync preview, sync
+- **10 tools**: 3 folder-sync tools + 7 standalone task/note CRUD tools
+- **Type-aware sync**: each folder syncs either **tasks** (type=1) or **notes** (type=2), chosen at setup
 - **Multi-folder**: sync multiple projects to different local folders
 - **Bidirectional sync**: pull remote changes, push local changes
 - **Delete sync**: deleted local files remove tasks on server; deleted tasks remove local files
+- **Standalone CRUD**: create/edit/complete/delete tasks and notes directly, no folder setup required
 - **User-scoped API key**: one key works across all your projects
 
 ## Getting Started
@@ -64,10 +66,15 @@ Restart Claude Code, Cursor, or whichever MCP client you use so it picks up the 
 Ask your AI agent to run:
 
 ```
-planko_setup(projectName: "My Project", folderPath: "/path/to/folder", email: "you@email.com")
+planko_setup(projectName: "My Project", folderPath: "/path/to/folder", email: "you@email.com", syncType: "tasks")
 ```
 
-This maps a Planko project to a local folder. You can set up multiple projects pointing to different folders.
+This maps a Planko project to a local folder. `syncType` is **required** and must be `"tasks"` or `"notes"`:
+
+- `syncType: "tasks"` — the folder pulls/pushes only **tasks** (type=1). New local `.md` files are created as tasks.
+- `syncType: "notes"` — the folder pulls/pushes only **notes** (type=2). New local `.md` files are created as notes.
+
+A folder is bound to one type for its whole lifetime. To sync both tasks and notes for the same project, set up two folders. You can set up multiple projects pointing to different folders.
 
 ### Step 5 — Sync
 
@@ -79,11 +86,65 @@ Tasks are pulled as `.md` files into your folder. Local changes are pushed back 
 
 ## Tools
 
+The server exposes 10 tools in two groups: **folder-sync** tools (bind a project to a local folder) and **standalone CRUD** tools (operate directly via your API key, no folder needed).
+
+### Folder-sync tools
+
 | Tool | Description | Parameters |
 |---|---|---|
-| `planko_setup` | Set up sync between a project and a local folder | `projectName`, `folderPath`, `email` |
+| `planko_setup` | Set up sync between a project and a local folder | `projectName`, `folderPath`, `email`, `syncType` (`tasks`\|`notes`) |
 | `planko_sync_preview` | Preview what would be synced (read-only) | `projectName` (optional) |
 | `planko_sync` | Execute bidirectional sync with delete support | `projectName` (optional) |
+
+### Standalone CRUD tools
+
+These work with the **same API key** and require **no folder setup**. Notes are Planko tasks with `type=2`; tasks are `type=1`. They live in the same collection, so edit/delete work on both. `create_*` tools accept all task/note properties as optional params (only `name` is required); the Markdown `description` is converted to Planko's rich-text (BlockNote) format automatically.
+
+| Tool | Description | Key parameters |
+|---|---|---|
+| `planko_create_task` | Create a task (type=1) | `name` (required), `projectName` (optional), plus any properties below |
+| `planko_create_note` | Create a note (type=2) | `name` (required), `projectName` (optional), plus any properties below |
+| `planko_edit_task` | Edit an existing task by id | `taskId` (required), plus any properties to change |
+| `planko_edit_note` | Edit an existing note by id (shares the task edit endpoint) | `taskId` (required), plus any properties to change |
+| `planko_complete_task` | Mark a task complete (status=2) | `taskId` (required) |
+| `planko_delete_task` | Delete a task by id | `taskId` (required) |
+| `planko_delete_note` | Delete a note by id (shares the task delete endpoint) | `taskId` (required) |
+
+**Optional properties** accepted by the create/edit tools (all optional; omit to leave unchanged):
+
+| Property | Type | Notes |
+|---|---|---|
+| `description` | Markdown string | Converted to BlockNote JSON before saving |
+| `dueDate` | ISO 8601 string | |
+| `datePlain` | `YYYY-MM-DD` | |
+| `time` / `endTime` | `HH:MM` | Start / end time |
+| `alert` | boolean | Whether a reminder is enabled |
+| `alertLeadTime` | `null`\|`ontime`\|`15min`\|`30min`\|`1hour`\|`1day` | Reminder lead time |
+| `priority` | `1`\|`2`\|`3` | |
+| `repeat` | `null`\|`daily`\|`workdays`\|`weekly`\|`biweekly`\|`monthly`\|`custom_weekly`\|`yearly` | Recurrence rule |
+| `repeatDate` | ISO 8601 string | Recurrence anchor/end |
+| `selectedWeekdays` | array of `0`–`6` | For `custom_weekly` (0=Sunday) |
+| `parentId` | ObjectId | Parent task, for subtasks |
+| `tags` | array of ObjectId | Tag ids |
+| `kanbanColumnId` / `boardId` | ObjectId | Kanban placement |
+| `type` | `1`\|`2` | (edit tools only) switch task↔note |
+| `projectId` | ObjectId | (edit tools only) move to another project |
+
+Notes:
+
+- On create, `projectName` is resolved to a project id via your accessible projects (not the local folder config). If omitted, the backend applies your default project.
+- `complete` sets status=2 and, for a recurring task, stops the series and completes the current occurrence.
+- Reminders, recurrence, positions, kanban and timezone handling are all applied server-side (the tools reuse Planko's own task logic).
+
+#### Examples
+
+```
+planko_create_task(name: "Ship v2", projectName: "Work", dueDate: "2026-08-01", priority: 1)
+planko_create_note(name: "Meeting notes", description: "# Sync\n- point A\n- point B")
+planko_edit_task(taskId: "665f...c0", name: "Ship v2.1", alertLeadTime: "1hour")
+planko_complete_task(taskId: "665f...c0")
+planko_delete_note(taskId: "665f...aa")
+```
 
 ### Sync preview
 
@@ -112,10 +173,14 @@ Sync order: delete, pull, push. Local changes overwrite remote on conflict.
 
 ## How it works
 
-- Each Planko task maps to a local `.md` file (task name becomes filename)
+- Each Planko task/note maps to a local `.md` file (task name becomes filename)
+- Each folder is **type-bound**: `planko_setup` records `type` (1=tasks, 2=notes) on the folder's sync state and in the global config, and sync only pulls/pushes that type. New local `.md` files are created with the folder's type.
+  - The chosen `type` is sent to the backend on every `status`/`pull` (`&type=`) and `push` (body `type`) call.
+  - Backward-compatible: a config entry created before this feature has no `type`, so its folder keeps the legacy type-agnostic behavior (syncs all task types).
 - Task descriptions are converted between BlockNote and Markdown automatically
-- Sync state is tracked in `.planko-mcp-sync.json` per folder
-- Global config is stored at `~/.planko-mcp/config.json`
+- Sync state is tracked in `.planko-mcp-sync.json` per folder (includes `syncType` when set)
+- Global config is stored at `~/.planko-mcp/config.json` (each project entry stores `projectId`, `folder`, `email`, `type`)
+- The standalone CRUD tools bypass folders entirely and call user-scoped endpoints directly with your API key
 - API keys are never written to any file
 
 ## License

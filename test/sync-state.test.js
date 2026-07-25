@@ -196,6 +196,47 @@ describe('createSyncState', () => {
     expect(state.apiKey).toBeUndefined();
     expect(state.userEmail).toBeUndefined();
   });
+
+  it('stores syncType=1 (tasks) when provided', () => {
+    const state = createSyncState('proj1', 'Test', 1);
+    expect(state.syncType).toBe(1);
+  });
+
+  it('stores syncType=2 (notes) when provided', () => {
+    const state = createSyncState('proj1', 'Test', 2);
+    expect(state.syncType).toBe(2);
+  });
+
+  it('omits syncType when not provided (legacy type-agnostic)', () => {
+    const state = createSyncState('proj1', 'Test');
+    expect(state).not.toHaveProperty('syncType');
+    expect(state.syncType).toBeUndefined();
+  });
+
+  it('omits syncType for invalid values', () => {
+    expect(createSyncState('p', 'T', 0).syncType).toBeUndefined();
+    expect(createSyncState('p', 'T', 3).syncType).toBeUndefined();
+    expect(createSyncState('p', 'T', 'tasks').syncType).toBeUndefined();
+  });
+
+  it('preserves syncType through write/read roundtrip', () => {
+    const state = createSyncState('proj1', 'Test', 2);
+    writeSyncState(tempDir, state);
+    const read = readSyncState(tempDir);
+    expect(read.syncType).toBe(2);
+  });
+
+  it('does not strip syncType on read of a legacy-plus-type file', () => {
+    writeSyncState(tempDir, {
+      project: { _id: 'p1' },
+      syncType: 1,
+      apiKey: 'SECRET',
+      tasks: [],
+    });
+    const read = readSyncState(tempDir);
+    expect(read.syncType).toBe(1);
+    expect(read.apiKey).toBeUndefined();
+  });
 });
 
 describe('buildIndexes', () => {
