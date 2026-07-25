@@ -4,12 +4,13 @@ MCP server for syncing [Planko](https://planko.io) tasks with local Markdown fil
 
 ## Features
 
-- **10 tools**: 3 folder-sync tools + 7 standalone task/note CRUD tools
+- **14 tools**: 3 folder-sync tools + 7 standalone task/note CRUD tools + 4 standalone read (list/view) tools
 - **Type-aware sync**: each folder syncs either **tasks** (type=1) or **notes** (type=2), chosen at setup
 - **Multi-folder**: sync multiple projects to different local folders
 - **Bidirectional sync**: pull remote changes, push local changes
 - **Delete sync**: deleted local files remove tasks on server; deleted tasks remove local files
 - **Standalone CRUD**: create/edit/complete/delete tasks and notes directly, no folder setup required
+- **Standalone read**: list and view tasks/notes with rich filters, no folder setup required
 - **User-scoped API key**: one key works across all your projects
 
 ## Getting Started
@@ -86,7 +87,7 @@ Tasks are pulled as `.md` files into your folder. Local changes are pushed back 
 
 ## Tools
 
-The server exposes 10 tools in two groups: **folder-sync** tools (bind a project to a local folder) and **standalone CRUD** tools (operate directly via your API key, no folder needed).
+The server exposes 14 tools in three groups: **folder-sync** tools (bind a project to a local folder), **standalone CRUD** tools (create/edit/complete/delete directly via your API key, no folder needed), and **standalone read** tools (list/view directly via your API key, no folder needed).
 
 ### Folder-sync tools
 
@@ -144,6 +145,48 @@ planko_create_note(name: "Meeting notes", description: "# Sync\n- point A\n- poi
 planko_edit_task(taskId: "665f...c0", name: "Ship v2.1", alertLeadTime: "1hour")
 planko_complete_task(taskId: "665f...c0")
 planko_delete_note(taskId: "665f...aa")
+```
+
+### Standalone read tools
+
+These also work with the **same API key** and require **no folder setup**. `list_*` returns a concise, readable summary (one line per item plus a `total`/page footer) — never a raw JSON dump. `view_*` returns full detail with the `description` converted from BlockNote to **Markdown** for display.
+
+| Tool | Description | Key parameters |
+|---|---|---|
+| `planko_list_tasks` | List your tasks (type=1) | all filters below |
+| `planko_list_notes` | List your notes (type=2) | filter subset: `showCompleted`, `projectName`/`projectId`, `tags`, `search`, `sortBy`, `limit`, `page` |
+| `planko_view_task` | View one task by id | `taskId` (required) |
+| `planko_view_note` | View one note by id (shares the view endpoint) | `taskId` (required) |
+
+**Scope.** Without `projectId`/`projectName`, a list is scoped to **your own** items. With a project (resolved from `projectName` via your accessible projects), it includes that project's items **including workspace-shared** ones from other members. `view_*` returns the item if you own it or can access its project, otherwise it errors (404 if missing, 403 if not visible). `view_task`/`view_note` do not filter by type — either id resolves; the `task`/`note` label is informational.
+
+**List filters** (`planko_list_tasks` accepts all; `planko_list_notes` accepts the applicable subset):
+
+| Filter | Type | Notes |
+|---|---|---|
+| `status` | `1` \| `2` | 1=open, 2=complete |
+| `showCompleted` | boolean | When false/omitted and no explicit `status`, completed items are excluded |
+| `priority` | `1` \| `2` \| `3` | (tasks only) |
+| `projectName` | string | Resolved to a project id via your accessible projects |
+| `projectId` | ObjectId | Alternative to `projectName` |
+| `parentId` | ObjectId | (tasks only) list subtasks of this parent |
+| `tags` | array of ObjectId | AND semantics — item must have all tags |
+| `search` | string | Case-insensitive match on the name |
+| `dueDateFrom` / `dueDateTo` | `YYYY-MM-DD` | (tasks only) inclusive due-date bounds |
+| `sortBy` | `field:asc` \| `field:desc` | Fields: `dueDate`, `createdAt`, `updatedAt`, `priority`, `position`, `name`; default `updatedAt:desc` |
+| `limit` | int | Default 50, max 200 |
+| `page` | int | Default 1 |
+
+Notes-specific behavior: deleted notes and recurring-copy notes are excluded server-side. For tasks, recurring occurrences appear as separate dated items.
+
+#### Examples
+
+```
+planko_list_tasks(status: 1, priority: 1, dueDateFrom: "2026-07-20", dueDateTo: "2026-07-26", sortBy: "dueDate:asc")
+planko_list_tasks(projectName: "Work", search: "invoice", limit: 20)
+planko_list_notes(search: "meeting", showCompleted: false)
+planko_view_task(taskId: "665f...c0")
+planko_view_note(taskId: "665f...aa")
 ```
 
 ### Sync preview

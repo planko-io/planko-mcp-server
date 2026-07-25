@@ -131,3 +131,73 @@ describe('api CRUD endpoints', () => {
     expect(lastCall().options.headers['x-api-key']).toBe('test-key');
   });
 });
+
+describe('api.listTasks url/query shaping', () => {
+  function queryOf(call) {
+    return new URL(call.url).searchParams;
+  }
+
+  it('GETs /tasks with no query when params are empty', async () => {
+    await makeClient().listTasks();
+    const call = lastCall();
+    expect(call.url).toBe(`${BASE}/mcp-project-sync/tasks`);
+    expect(call.options.method).toBe('GET');
+  });
+
+  it('serializes type and scalar filters, omitting undefined/null', async () => {
+    await makeClient().listTasks({
+      type: 1,
+      status: 2,
+      priority: 3,
+      projectId: 'P1',
+      search: 'buy milk',
+      limit: 25,
+      page: 2,
+      showCompleted: undefined,
+      parentId: null,
+    });
+    const q = queryOf(lastCall());
+    expect(q.get('type')).toBe('1');
+    expect(q.get('status')).toBe('2');
+    expect(q.get('priority')).toBe('3');
+    expect(q.get('projectId')).toBe('P1');
+    expect(q.get('search')).toBe('buy milk');
+    expect(q.get('limit')).toBe('25');
+    expect(q.get('page')).toBe('2');
+    expect(q.has('showCompleted')).toBe(false);
+    expect(q.has('parentId')).toBe(false);
+  });
+
+  it('serializes a tags array to a CSV string', async () => {
+    await makeClient().listTasks({ type: 2, tags: ['aaa', 'bbb', 'ccc'] });
+    const q = queryOf(lastCall());
+    expect(q.get('tags')).toBe('aaa,bbb,ccc');
+  });
+
+  it('omits an empty tags array', async () => {
+    await makeClient().listTasks({ type: 1, tags: [] });
+    const q = queryOf(lastCall());
+    expect(q.has('tags')).toBe(false);
+  });
+
+  it('serializes a boolean filter', async () => {
+    await makeClient().listTasks({ type: 2, showCompleted: false });
+    const q = queryOf(lastCall());
+    expect(q.get('showCompleted')).toBe('false');
+  });
+
+  it('sends the x-api-key header on GET', async () => {
+    await makeClient().listTasks({ type: 1 });
+    expect(lastCall().options.headers['x-api-key']).toBe('test-key');
+  });
+});
+
+describe('api.getTask url shaping', () => {
+  it('GETs /tasks/:id', async () => {
+    await makeClient().getTask('abc123');
+    const call = lastCall();
+    expect(call.url).toBe(`${BASE}/mcp-project-sync/tasks/abc123`);
+    expect(call.options.method).toBe('GET');
+    expect(call.options.body).toBeUndefined();
+  });
+});
