@@ -20,6 +20,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createApiClient } from './src/api.js';
+import { isBlankValue } from './src/sanitize.js';
 import {
   blockNoteToMarkdown,
   markdownToBlockNote,
@@ -633,7 +634,7 @@ const taskProps = {
 function buildTaskBody(params) {
   const body = {};
   for (const [key, value] of Object.entries(params)) {
-    if (value === undefined) continue;
+    if (isBlankValue(value)) continue;
     body[key] = value;
   }
   if ('description' in body) {
@@ -680,7 +681,7 @@ async function handleCreate(type, params, kindLabel) {
 
   // Resolve projectName -> projectId via the API. When omitted, OMIT the key
   // entirely so the backend applies the user's default project.
-  if (projectName) {
+  if (!isBlankValue(projectName)) {
     body.projectId = await resolveProjectId(projectName);
   }
 
@@ -885,10 +886,10 @@ async function buildListParams(type, params) {
   const { projectName, ...rest } = params;
   const out = { type };
   for (const [key, value] of Object.entries(rest)) {
-    if (value === undefined) continue;
+    if (isBlankValue(value)) continue;
     out[key] = value;
   }
-  if (projectName) {
+  if (!isBlankValue(projectName)) {
     out.projectId = await resolveProjectId(projectName);
   }
   return out;
