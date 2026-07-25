@@ -849,6 +849,230 @@ server.tool(
   }
 );
 
+// --- Standalone READ tools (Part C) ---
+// Read-only, user-scoped via API key; no folder setup required. List tools send
+// `type` (1=tasks, 2=notes) and parametrized filters; view tools fetch one item
+// by id and render its BlockNote description as Markdown. No mutation.
+
+const datePlain = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD');
+
+const sortBySchema = z
+  .string()
+  .describe(
+    "Sort as 'field:asc' or 'field:desc'. Allowed fields: dueDate, createdAt, updatedAt, priority, position, name. Default updatedAt:desc."
+  );
+
+const STATUS_LABEL = { 1: 'open', 2: 'complete' };
+
+/** Human label for a status code. */
+function statusLabel(status) {
+  return STATUS_LABEL[status] || (status == null ? 'unknown' : String(status));
+}
+
+/** Render a task/note's tags as a comma list of names (fallback to ids). */
+function formatTags(tags) {
+  if (!Array.isArray(tags) || tags.length === 0) return null;
+  return tags
+    .map((t) => (t && typeof t === 'object' ? t.name || t._id : t))
+    .filter(Boolean)
+    .join(', ');
+}
+
+/** Build the API filter params from tool params, resolving projectName. */
+async function buildListParams(type, params) {
+  const { projectName, ...rest } = params;
+  const out = { type };
+  for (const [key, value] of Object.entries(rest)) {
+    if (value === undefined) continue;
+    out[key] = value;
+  }
+  if (projectName) {
+    out.projectId = await resolveProjectId(projectName);
+  }
+  return out;
+}
+
+/** One concise summary line per item for list output. */
+function summarizeItem(item, index) {
+  const parts = [];
+  parts.push(`status: ${statusLabel(item.status)}`);
+  if (item.priority != null) parts.push(`priority: ${item.priority}`);
+  if (item.dueDate) parts.push(`due: ${item.dueDate}${item.time ? ` ${item.time}` : ''}`);
+  else if (item.datePlain) parts.push(`due: ${item.datePlain}${item.time ? ` ${item.time}` : ''}`);
+  const tagStr = formatTags(item.tags);
+  if (tagStr) parts.push(`tags: ${tagStr}`);
+  if (item.projectId) parts.push(`project: ${item.projectId}`);
+  return (
+    `${index}. ${item.name || '(untitled)'} [id: ${item._id}]\n` +
+    `   ${parts.join(' | ')}`
+  );
+}
+
+/** Render a list response as a concise, readable summary (not raw JSON). */
+function renderList(result, kindLabelPlural) {
+  const tasks = Array.isArray(result?.tasks) ? result.tasks : [];
+  const total = result?.total ?? tasks.length;
+  const page = result?.page ?? 1;
+  const limit = result?.limit ?? tasks.length;
+
+  if (tasks.length === 0) {
+    return `No ${kindLabelPlural} found (total: ${total}, page ${page}).`;
+  }
+
+  const lines = tasks.map((t, i) => summarizeItem(t, i + 1));
+  const footer = `\nShowing ${tasks.length} of ${total} ${kindLabelPlural} (page ${page}, limit ${limit}).`;
+  return `${lines.join('\n')}\n${footer}`;
+}
+
+/** Render one item's full detail with the description converted to Markdown. */
+function renderItem(item, kindLabel) {
+  const lines = [];
+  lines.push(`${item.name || '(untitled)'}`);
+  lines.push(`id: ${item._id}`);
+  lines.push(`type: ${item.type === 2 ? 'note' : 'task'} (${kindLabel})`);
+  lines.push(`status: ${statusLabel(item.status)}`);
+  if (item.priority != null) lines.push(`priority: ${item.priority}`);
+  if (item.dueDate) lines.push(`due: ${item.dueDate}${item.time ? ` ${item.time}` : ''}`);
+  else if (item.datePlain) lines.push(`due: ${item.datePlain}${item.time ? ` ${item.time}` : ''}`);
+  const tagStr = formatTags(item.tags);
+  if (tagStr) lines.push(`tags: ${tagStr}`);
+  if (item.projectId) lines.push(`project: ${item.projectId}`);
+  if (item.parentId) lines.push(`parent: ${item.parentId}`);
+  if (item.createdAt) lines.push(`created: ${item.createdAt}`);
+  if (item.updatedAt) lines.push(`updated: ${item.updatedAt}`);
+
+  const md = descriptionToMarkdown(item.description);
+  lines.push('');
+  lines.push('--- description ---');
+  lines.push(md && md.trim() ? md : '(empty)');
+  return lines.join('\n');
+}
+
+/** Extract a single item from a view response (shape-tolerant). */
+function unwrapItem(res) {
+  return (res && (res.task || res.data)) || res || {};
+}
+
+// Shared list filter surface (task tools use all; note tools use the applicable subset).
+const listStatus = z
+  .union([z.literal(1), z.literal(2)])
+  .optional()
+  .describe('Filter by status: 1=open, 2=complete');
+const listShowCompleted = z
+  .boolean()
+  .optional()
+  .describe('When false/omitted (and no explicit status), completed items are excluded');
+const listProjectName = z
+  .string()
+  .optional()
+  .describe('Filter to a project by name (resolved to its id)');
+const listProjectId = objectId.optional().describe('Filter to a project by id');
+const listTags = z.array(objectId).optional().describe('Filter by tag ids (AND — item must have all)');
+const listSearch = z.string().optional().describe('Case-insensitive search on the name');
+const listSortBy = sortBySchema.optional();
+const listLimit = z
+  .number()
+  .int()
+  .min(1)
+  .max(200)
+  .optional()
+  .describe('Max items to return (default 50, max 200)');
+const listPage = z.number().int().min(1).optional().describe('Page number (default 1)');
+
+// ---- planko_list_tasks ----
+server.tool(
+  'planko_list_tasks',
+  'List your Planko tasks (type=1) via your API key, no folder setup required. Filters are optional. Without projectId/projectName the list is scoped to your own tasks; with a project it includes that project\'s (incl. workspace-shared) tasks. Note: recurring tasks appear as separate dated occurrences. Returns a concise summary, not raw JSON.',
+  {
+    status: listStatus,
+    showCompleted: listShowCompleted,
+    priority: z
+      .union([z.literal(1), z.literal(2), z.literal(3)])
+      .optional()
+      .describe('Filter by priority: 1, 2, or 3'),
+    projectName: listProjectName,
+    projectId: listProjectId,
+    parentId: objectId.optional().describe('List subtasks of this parent task id'),
+    tags: listTags,
+    search: listSearch,
+    dueDateFrom: datePlain.optional().describe('Inclusive lower bound on due date (YYYY-MM-DD)'),
+    dueDateTo: datePlain.optional().describe('Inclusive upper bound on due date (YYYY-MM-DD)'),
+    sortBy: listSortBy,
+    limit: listLimit,
+    page: listPage,
+  },
+  async (params) => {
+    try {
+      const apiParams = await buildListParams(1, params);
+      const result = await api.listTasks(apiParams);
+      return toolOk(renderList(result, 'tasks'));
+    } catch (err) {
+      return toolError(`List tasks failed: ${err.message}`);
+    }
+  }
+);
+
+// ---- planko_list_notes ----
+server.tool(
+  'planko_list_notes',
+  'List your Planko notes (type=2) via your API key, no folder setup required. Filters are optional. Without projectId/projectName the list is scoped to your own notes; with a project it includes that project\'s (incl. workspace-shared) notes. Deleted and recurring-copy notes are excluded. Returns a concise summary, not raw JSON.',
+  {
+    showCompleted: listShowCompleted,
+    projectName: listProjectName,
+    projectId: listProjectId,
+    tags: listTags,
+    search: listSearch,
+    sortBy: listSortBy,
+    limit: listLimit,
+    page: listPage,
+  },
+  async (params) => {
+    try {
+      const apiParams = await buildListParams(2, params);
+      const result = await api.listTasks(apiParams);
+      return toolOk(renderList(result, 'notes'));
+    } catch (err) {
+      return toolError(`List notes failed: ${err.message}`);
+    }
+  }
+);
+
+// ---- planko_view_task ----
+server.tool(
+  'planko_view_task',
+  'View one Planko task by id, with its description rendered as Markdown. The type is informational — this endpoint returns the item regardless of task/note type.',
+  {
+    taskId: objectId.describe('Id of the task to view (required)'),
+  },
+  async ({ taskId }) => {
+    try {
+      const res = await api.getTask(taskId);
+      return toolOk(renderItem(unwrapItem(res), 'task'));
+    } catch (err) {
+      return toolError(`View task failed: ${err.message}`);
+    }
+  }
+);
+
+// ---- planko_view_note ----
+server.tool(
+  'planko_view_note',
+  'View one Planko note by id, with its description rendered as Markdown. The type is informational — this endpoint returns the item regardless of task/note type.',
+  {
+    taskId: objectId.describe('Id of the note to view (required)'),
+  },
+  async ({ taskId }) => {
+    try {
+      const res = await api.getTask(taskId);
+      return toolOk(renderItem(unwrapItem(res), 'note'));
+    } catch (err) {
+      return toolError(`View note failed: ${err.message}`);
+    }
+  }
+);
+
 // --- Start server ---
 
 async function main() {

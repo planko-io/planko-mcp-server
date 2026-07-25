@@ -38,7 +38,7 @@ Move these from `scripts/planko-mcp-sync.js` into ESM modules inside the package
 
 ## Step 3 — Define MCP Tools
 
-**As shipped**, the server exposes 10 tools: 3 folder-sync tools + 7 standalone CRUD tools. (The earlier `planko_pull`/`planko_push`/`planko_status` were folded into the bidirectional `planko_sync`/`planko_sync_preview`.)
+**As shipped**, the server exposes 14 tools: 3 folder-sync tools + 7 standalone CRUD tools + 4 standalone read tools. (The earlier `planko_pull`/`planko_push`/`planko_status` were folded into the bidirectional `planko_sync`/`planko_sync_preview`.)
 
 Folder-sync tools:
 
@@ -62,7 +62,18 @@ Standalone CRUD tools (user-scoped API key, no folder required):
 | `planko_delete_task`    | Delete a task by id                     | `taskId` (required)                                       |
 | `planko_delete_note`    | Delete a note by id (shared endpoint)   | `taskId` (required)                                       |
 
-Folder-sync tools operate on the folders configured via `planko_setup` (stored in `~/.planko-mcp/config.json`). The CRUD tools operate directly via the `PLANKO_API_KEY`.
+Standalone read tools (user-scoped API key, no folder required):
+
+| Tool                 | Description                              | Params                                                                 |
+| -------------------- | --------------------------------------- | ---------------------------------------------------------------------- |
+| `planko_list_tasks`  | List tasks (type=1) with filters        | `status`, `showCompleted`, `priority`, `projectName`/`projectId`, `parentId`, `tags`, `search`, `dueDateFrom`, `dueDateTo`, `sortBy`, `limit`, `page` (all optional) |
+| `planko_list_notes`  | List notes (type=2) with filters        | `showCompleted`, `projectName`/`projectId`, `tags`, `search`, `sortBy`, `limit`, `page` (all optional) |
+| `planko_view_task`   | View one task by id (full detail)       | `taskId` (required)                                                    |
+| `planko_view_note`   | View one note by id (shared view endpoint) | `taskId` (required)                                                 |
+
+Read tools hit `GET /mcp-project-sync/tasks` and `GET /mcp-project-sync/tasks/:taskId`. `list_*` renders a concise summary (id + name + key fields + total/page footer); `view_*` renders full detail with the description converted to Markdown. Scope defaults to the caller's own items; a `projectName`/`projectId` filter widens to that project's (incl. workspace-shared) items. `view_*` returns 404 if missing / 403 if not visible.
+
+Folder-sync tools operate on the folders configured via `planko_setup` (stored in `~/.planko-mcp/config.json`). The CRUD and read tools operate directly via the `PLANKO_API_KEY`.
 
 ### Error handling
 
@@ -103,7 +114,11 @@ index.js (entry point, #!/usr/bin/env node, ESM)
               ├── planko_edit_note     → edit note by id (shared edit endpoint)
               ├── planko_complete_task → mark task complete (status=2)
               ├── planko_delete_task   → delete task by id
-              └── planko_delete_note   → delete note by id (shared endpoint)
+              ├── planko_delete_note   → delete note by id (shared endpoint)
+              ├── planko_list_tasks    → list tasks (type=1) with filters
+              ├── planko_list_notes    → list notes (type=2) with filters
+              ├── planko_view_task     → view one task by id
+              └── planko_view_note     → view one note by id (shared endpoint)
 ```
 
 ## Step 5 — Configuration

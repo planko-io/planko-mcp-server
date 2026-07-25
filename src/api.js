@@ -120,5 +120,38 @@ export function createApiClient({ apiKey, apiBase }) {
     async deleteTask(taskId) {
       return request('DELETE', `/mcp-project-sync/tasks/${taskId}`);
     },
+
+    // --- Read (user-scoped, no folder sync required) ---
+
+    /**
+     * GET /mcp-project-sync/tasks — list the user's tasks (type=1) or notes
+     * (type=2) with parametrized filters. Builds the query string from `params`,
+     * omitting undefined/null values. A `tags` array is serialized to a CSV
+     * string (the backend splits on comma).
+     */
+    async listTasks(params = {}) {
+      const qs = new URLSearchParams();
+      for (const [key, value] of Object.entries(params)) {
+        if (value === undefined || value === null) continue;
+        if (key === 'tags' && Array.isArray(value)) {
+          if (value.length === 0) continue;
+          qs.set(key, value.join(','));
+        } else {
+          qs.set(key, String(value));
+        }
+      }
+      const query = qs.toString();
+      return request(
+        'GET',
+        `/mcp-project-sync/tasks${query ? `?${query}` : ''}`
+      );
+    },
+
+    /**
+     * GET /mcp-project-sync/tasks/:taskId — fetch one task or note by id.
+     */
+    async getTask(taskId) {
+      return request('GET', `/mcp-project-sync/tasks/${taskId}`);
+    },
   };
 }
