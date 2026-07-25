@@ -1017,13 +1017,15 @@ server.tool(
 // ---- planko_list_notes ----
 server.tool(
   'planko_list_notes',
-  'List your Planko notes (type=2) via your API key, no folder setup required. Filters are optional. Without projectId/projectName the list is scoped to your own notes; with a project it includes that project\'s (incl. workspace-shared) notes. Deleted and recurring-copy notes are excluded. Returns a concise summary, not raw JSON.',
+  'List your Planko notes (type=2) via your API key, no folder setup required. Filters are optional. Without projectId/projectName the list is scoped to your own notes; with a project it includes that project\'s (incl. workspace-shared) notes. Deleted notes are excluded; recurring notes show as one entry per series unless you filter by a due-date range, in which case the individual dated occurrences are returned. Returns a concise summary, not raw JSON.',
   {
     showCompleted: listShowCompleted,
     projectName: listProjectName,
     projectId: listProjectId,
     tags: listTags,
     search: listSearch,
+    dueDateFrom: datePlain.optional().describe('Inclusive lower bound on due date (YYYY-MM-DD)'),
+    dueDateTo: datePlain.optional().describe('Inclusive upper bound on due date (YYYY-MM-DD)'),
     sortBy: listSortBy,
     limit: listLimit,
     page: listPage,
