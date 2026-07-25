@@ -20,7 +20,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createApiClient } from './src/api.js';
-import { isBlankValue } from './src/sanitize.js';
+import { isBlankValue, applyDueDateFallback } from './src/sanitize.js';
 import {
   blockNoteToMarkdown,
   markdownToBlockNote,
@@ -637,6 +637,7 @@ function buildTaskBody(params) {
     if (isBlankValue(value)) continue;
     body[key] = value;
   }
+  applyDueDateFallback(body);
   if ('description' in body) {
     body.description = markdownToDescription(body.description);
   }

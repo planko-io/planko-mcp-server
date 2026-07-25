@@ -21,3 +21,17 @@ export function isBlankValue(value) {
   if (Array.isArray(value)) return value.length === 0;
   return false;
 }
+
+/**
+ * LLM callers often put the date in `datePlain` and leave `dueDate` empty.
+ * The backend derives datePlain FROM dueDate but not the reverse, so a
+ * datePlain-only task ends up with dueDate=null and never appears on day/agenda
+ * views (it looks "not created"). Mirror datePlain -> dueDate in that case.
+ * Mutates and returns `body`.
+ */
+export function applyDueDateFallback(body) {
+  if (isBlankValue(body.dueDate) && !isBlankValue(body.datePlain)) {
+    body.dueDate = body.datePlain;
+  }
+  return body;
+}
