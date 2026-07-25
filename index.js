@@ -22,6 +22,12 @@ import { join } from 'node:path';
 import { createApiClient } from './src/api.js';
 import { isBlankValue, applyDueDateFallback } from './src/sanitize.js';
 import {
+  lockProjectId,
+  sanitizeFilters,
+  ownerName,
+  assertProjectAllowed,
+} from './src/projectLock.js';
+import {
   blockNoteToMarkdown,
   markdownToBlockNote,
   descriptionToMarkdown,
@@ -53,6 +59,11 @@ if (!API_KEY) {
 }
 
 const api = createApiClient({ apiKey: API_KEY });
+
+// Optional project lock. When set, EVERY operation is confined to this single
+// project id (a hard override the agent cannot bypass). Read once at startup.
+// When null (the default) behavior is identical to before this feature.
+const PROJECT_LOCK = (process.env.PLANKO_PROJECT_LOCK || '').trim() || null;
 
 // --- Tool helpers ---
 
@@ -361,7 +372,7 @@ async function executeSync(projectId, folder, sync) {
 
 const server = new McpServer({
   name: 'planko-mcp-server',
-  version: '0.2.0',
+  version: '0.5.0',
 });
 
 // ---- planko_setup ----
@@ -672,6 +683,16 @@ function describeTask(res) {
 }
 
 /**
+ * When PROJECT_LOCK is set, fetch a by-id task and refuse the operation unless
+ * it belongs to the locked project. No-op when the lock is null.
+ */
+async function assertTaskInLock(taskId) {
+  if (!PROJECT_LOCK) return;
+  const res = await api.getTask(taskId);
+  assertProjectAllowed(PROJECT_LOCK, unwrapItem(res));
+}
+
+/**
  * Shared create handler for tasks (type=1) and notes (type=2).
  */
 async function handleCreate(type, params, kindLabel) {
@@ -680,9 +701,13 @@ async function handleCreate(type, params, kindLabel) {
   body.name = name;
   body.type = type;
 
-  // Resolve projectName -> projectId via the API. When omitted, OMIT the key
-  // entirely so the backend applies the user's default project.
-  if (!isBlankValue(projectName)) {
+  if (PROJECT_LOCK) {
+    // Hard override: always the locked project; ignore any caller project field
+    // and do NOT resolve projectName.
+    body.projectId = lockProjectId(PROJECT_LOCK, body.projectId);
+  } else if (!isBlankValue(projectName)) {
+    // Resolve projectName -> projectId via the API. When omitted, OMIT the key
+    // entirely so the backend applies the user's default project.
     body.projectId = await resolveProjectId(projectName);
   }
 
@@ -703,6 +728,16 @@ async function handleEdit(params, kindLabel) {
   const changed = Object.keys(body);
   if (changed.length === 0) {
     return toolError('Nothing to update: provide at least one field to change.');
+  }
+  if (PROJECT_LOCK) {
+    // Refuse to touch a task outside the locked project.
+    await assertTaskInLock(taskId);
+    // If the caller tried to move the task to another project, force it back to
+    // the lock (never let an edit move a task OUT of the locked project). If no
+    // project field was passed, leave the project unchanged.
+    if ('projectId' in body) {
+      body.projectId = lockProjectId(PROJECT_LOCK, body.projectId);
+    }
   }
   const res = await api.updateTask(taskId, body);
   const { id, name: savedName } = describeTask(res);
@@ -808,6 +843,7 @@ server.tool(
   },
   async ({ taskId }) => {
     try {
+      await assertTaskInLock(taskId);
       const res = await api.completeTask(taskId);
       const { id, name } = describeTask(res);
       return toolOk(`Completed task "${name}" (id: ${id}).`);
@@ -826,6 +862,7 @@ server.tool(
   },
   async ({ taskId }) => {
     try {
+      await assertTaskInLock(taskId);
       await api.deleteTask(taskId);
       return toolOk(`Deleted task (id: ${taskId}).`);
     } catch (err) {
@@ -843,6 +880,7 @@ server.tool(
   },
   async ({ taskId }) => {
     try {
+      await assertTaskInLock(taskId);
       await api.deleteTask(taskId);
       return toolOk(`Deleted note (id: ${taskId}).`);
     } catch (err) {
@@ -885,12 +923,17 @@ function formatTags(tags) {
 /** Build the API filter params from tool params, resolving projectName. */
 async function buildListParams(type, params) {
   const { projectName, ...rest } = params;
-  const out = { type };
-  for (const [key, value] of Object.entries(rest)) {
-    if (isBlankValue(value)) continue;
-    out[key] = value;
-  }
-  if (!isBlankValue(projectName)) {
+  // Sanitize scalar filters (drops blank/placeholder values, incl. a blank
+  // assigneeId => "all members"). projectId/assigneeId pass through here.
+  const out = { type, ...sanitizeFilters(rest) };
+  if (PROJECT_LOCK) {
+    // Hard override: force the project regardless of caller input. Do NOT
+    // resolve projectName here — the override wins unconditionally, so an
+    // invalid projectName must not be able to fail an otherwise-locked list
+    // (keeps list consistent with create, which also ignores projectName).
+    out.projectId = lockProjectId(PROJECT_LOCK, out.projectId);
+  } else if (!isBlankValue(projectName)) {
+    // Unlocked (default) path: unchanged behavior.
     out.projectId = await resolveProjectId(projectName);
   }
   return out;
@@ -906,8 +949,10 @@ function summarizeItem(item, index) {
   const tagStr = formatTags(item.tags);
   if (tagStr) parts.push(`tags: ${tagStr}`);
   if (item.projectId) parts.push(`project: ${item.projectId}`);
+  const owner = ownerName(item.userId);
+  if (owner) parts.push(`owner: ${owner}`);
   return (
-    `${index}. ${item.name || '(untitled)'} [id: ${item._id}]\n` +
+    `${index}. ${item.name || '(untitled)'} [id: ${item._id ?? item.id}]\n` +
     `   ${parts.join(' | ')}`
   );
 }
@@ -932,7 +977,7 @@ function renderList(result, kindLabelPlural) {
 function renderItem(item, kindLabel) {
   const lines = [];
   lines.push(`${item.name || '(untitled)'}`);
-  lines.push(`id: ${item._id}`);
+  lines.push(`id: ${item._id ?? item.id}`);
   lines.push(`type: ${item.type === 2 ? 'note' : 'task'} (${kindLabel})`);
   lines.push(`status: ${statusLabel(item.status)}`);
   if (item.priority != null) lines.push(`priority: ${item.priority}`);
@@ -941,6 +986,8 @@ function renderItem(item, kindLabel) {
   const tagStr = formatTags(item.tags);
   if (tagStr) lines.push(`tags: ${tagStr}`);
   if (item.projectId) lines.push(`project: ${item.projectId}`);
+  const owner = ownerName(item.userId);
+  if (owner) lines.push(`owner: ${owner}`);
   if (item.parentId) lines.push(`parent: ${item.parentId}`);
   if (item.createdAt) lines.push(`created: ${item.createdAt}`);
   if (item.updatedAt) lines.push(`updated: ${item.updatedAt}`);
@@ -971,6 +1018,9 @@ const listProjectName = z
   .optional()
   .describe('Filter to a project by name (resolved to its id)');
 const listProjectId = objectId.optional().describe('Filter to a project by id');
+const listAssigneeId = objectId
+  .optional()
+  .describe('Filter to a single project member by their user id (omit for all members)');
 const listTags = z.array(objectId).optional().describe('Filter by tag ids (AND — item must have all)');
 const listSearch = z.string().optional().describe('Case-insensitive search on the name');
 const listSortBy = sortBySchema.optional();
@@ -996,6 +1046,7 @@ server.tool(
       .describe('Filter by priority: 1, 2, or 3'),
     projectName: listProjectName,
     projectId: listProjectId,
+    assigneeId: listAssigneeId,
     parentId: objectId.optional().describe('List subtasks of this parent task id'),
     tags: listTags,
     search: listSearch,
@@ -1024,6 +1075,7 @@ server.tool(
     showCompleted: listShowCompleted,
     projectName: listProjectName,
     projectId: listProjectId,
+    assigneeId: listAssigneeId,
     tags: listTags,
     search: listSearch,
     sortBy: listSortBy,
@@ -1051,7 +1103,9 @@ server.tool(
   async ({ taskId }) => {
     try {
       const res = await api.getTask(taskId);
-      return toolOk(renderItem(unwrapItem(res), 'task'));
+      const item = unwrapItem(res);
+      assertProjectAllowed(PROJECT_LOCK, item);
+      return toolOk(renderItem(item, 'task'));
     } catch (err) {
       return toolError(`View task failed: ${err.message}`);
     }
@@ -1068,7 +1122,9 @@ server.tool(
   async ({ taskId }) => {
     try {
       const res = await api.getTask(taskId);
-      return toolOk(renderItem(unwrapItem(res), 'note'));
+      const item = unwrapItem(res);
+      assertProjectAllowed(PROJECT_LOCK, item);
+      return toolOk(renderItem(item, 'note'));
     } catch (err) {
       return toolError(`View note failed: ${err.message}`);
     }

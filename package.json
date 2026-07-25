@@ -1,6 +1,6 @@
 {
   "name": "planko-mcp-server",
-  "version": "0.4.2",
+  "version": "0.5.1",
   "description": "MCP server for syncing Planko tasks with local Markdown files",
   "type": "module",
   "bin": {
@@ -17,7 +17,7 @@
   },
   "scripts": {
     "test": "vitest run",
-    "prepublishOnly": "node --check index.js && node --check src/api.js && node --check src/converters.js && node --check src/sync-state.js"
+    "prepublishOnly": "node --check index.js && node --check src/api.js && node --check src/converters.js && node --check src/sync-state.js && node --check src/projectLock.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1"

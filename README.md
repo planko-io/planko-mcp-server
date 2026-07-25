@@ -158,7 +158,9 @@ These also work with the **same API key** and require **no folder setup**. `list
 | `planko_view_task` | View one task by id | `taskId` (required) |
 | `planko_view_note` | View one note by id (shares the view endpoint) | `taskId` (required) |
 
-**Scope.** Without `projectId`/`projectName`, a list is scoped to **your own** items. With a project (resolved from `projectName` via your accessible projects), it includes that project's items **including workspace-shared** ones from other members. `view_*` returns the item if you own it or can access its project, otherwise it errors (404 if missing, 403 if not visible). `view_task`/`view_note` do not filter by type — either id resolves; the `task`/`note` label is informational.
+**Scope.** Without `projectId`/`projectName`, a list is scoped to **your own** items. With a project (resolved from `projectName` via your accessible projects), it includes that project's items **including workspace-shared** ones from other members. Use `assigneeId` to narrow a project listing to one member; omit it for all members. `view_*` returns the item if you own it or can access its project, otherwise it errors (404 if missing, 403 if not visible). `view_task`/`view_note` do not filter by type — either id resolves; the `task`/`note` label is informational.
+
+**Owner in output.** When the backend populates an item's `userId` as an object `{ _id, name, email }`, list lines and `view_*` detail append `owner: <name>` so you can tell whose task it is in a multi-member project listing. If `userId` is a bare id/string, nothing extra is shown.
 
 **List filters** (`planko_list_tasks` accepts all; `planko_list_notes` accepts the applicable subset):
 
@@ -169,6 +171,7 @@ These also work with the **same API key** and require **no folder setup**. `list
 | `priority` | `1` \| `2` \| `3` | (tasks only) |
 | `projectName` | string | Resolved to a project id via your accessible projects |
 | `projectId` | ObjectId | Alternative to `projectName` |
+| `assigneeId` | ObjectId | Filter to a single project member by their user id. Omit for **all members**. Applies within a project listing (needs a project scope to be meaningful) |
 | `parentId` | ObjectId | (tasks only) list subtasks of this parent |
 | `tags` | array of ObjectId | AND semantics — item must have all tags |
 | `search` | string | Case-insensitive match on the name |
@@ -213,6 +216,45 @@ Sync order: delete, pull, push. Local changes overwrite remote on conflict.
 |---|---|---|
 | `PLANKO_API_KEY` | Yes | Your MCP API key from app.planko.io/integrations |
 | `PLANKO_API_BASE` | No | API base URL override (defaults to production) |
+| `PLANKO_PROJECT_LOCK` | No | Confine every operation to a single project id (see below). **Off by default** — when unset the server behaves exactly as before. |
+
+### Project lock (`PLANKO_PROJECT_LOCK`)
+
+Set `PLANKO_PROJECT_LOCK` to a project id to restrict this server instance to that
+one project. This is a **hard override the agent cannot bypass** — useful when a
+shared automation should only ever touch a single project.
+
+When set, it changes behavior as follows:
+
+- **Create** (`create_task` / `create_note`): the new item is always created in the
+  locked project; any `projectName` the caller passes is ignored (and not resolved).
+- **List** (`list_tasks` / `list_notes`): always scoped to the locked project
+  (ignoring `projectName`/`projectId`), which yields the all-members listing for
+  that project. Combine with `assigneeId` to narrow to one member.
+- **Edit** (`edit_task` / `edit_note`): if the caller supplies a `projectId`, it is
+  forced back to the locked project (an edit can never move a task out of it). If no
+  project field is supplied, the project is left unchanged.
+- **By-id operations** (`edit_*`, `complete_task`, `delete_*`, `view_*`): the target
+  task is fetched first, and the operation is refused with an error if the task does
+  not belong to the locked project.
+
+**Off by default:** when `PLANKO_PROJECT_LOCK` is unset (or blank), none of the above
+applies and the server is fully backward-compatible.
+
+```json
+{
+  "mcpServers": {
+    "planko": {
+      "command": "npx",
+      "args": ["-y", "planko-mcp-server"],
+      "env": {
+        "PLANKO_API_KEY": "your-api-key",
+        "PLANKO_PROJECT_LOCK": "6742635e764bda007ab987ed"
+      }
+    }
+  }
+}
+```
 
 ## How it works
 
