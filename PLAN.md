@@ -38,16 +38,31 @@ Move these from `scripts/planko-mcp-sync.js` into ESM modules inside the package
 
 ## Step 3 — Define MCP Tools
 
-| Tool                  | Description                                         | Params              |
-| --------------------- | --------------------------------------------------- | ------------------- |
-| `planko_setup`        | Initialize sync for a project folder                | `apiKey`, `email`   |
-| `planko_pull`         | Pull remote task changes to local `.md` files       | _(none)_            |
-| `planko_push`         | Push local `.md` file changes to Planko             | _(none)_            |
-| `planko_status`       | Check sync status (changed tasks, last sync)        | _(none)_            |
-| `planko_sync_preview` | Preview what would be synced (read-only, no writes) | _(none)_            |
-| `planko_sync`         | Execute bidirectional sync (pull then push)         | _(none)_            |
+**As shipped**, the server exposes 10 tools: 3 folder-sync tools + 7 standalone CRUD tools. (The earlier `planko_pull`/`planko_push`/`planko_status` were folded into the bidirectional `planko_sync`/`planko_sync_preview`.)
 
-All tools operate on the folder defined by `PLANKO_SYNC_FOLDER` (required env var, set at server startup).
+Folder-sync tools:
+
+| Tool                  | Description                                         | Params                                                        |
+| --------------------- | --------------------------------------------------- | ------------------------------------------------------------- |
+| `planko_setup`        | Initialize sync for a project folder                | `projectName`, `folderPath`, `email`, `syncType` (`tasks`\|`notes`) |
+| `planko_sync_preview` | Preview what would be synced (read-only, no writes) | `projectName` (optional)                                      |
+| `planko_sync`         | Execute bidirectional sync (delete, pull, push)     | `projectName` (optional)                                      |
+
+`syncType` binds the folder to tasks (type=1) or notes (type=2); the type is threaded into every `status`/`pull`/`push` call and used when creating new local files. Legacy config entries without a type keep type-agnostic behavior.
+
+Standalone CRUD tools (user-scoped API key, no folder required):
+
+| Tool                    | Description                             | Params                                                    |
+| ----------------------- | --------------------------------------- | --------------------------------------------------------- |
+| `planko_create_task`    | Create a task (type=1)                  | `name` (required), `projectName` (optional), task props   |
+| `planko_create_note`    | Create a note (type=2)                  | `name` (required), `projectName` (optional), task props   |
+| `planko_edit_task`      | Edit a task by id                       | `taskId` (required), editable props                       |
+| `planko_edit_note`      | Edit a note by id (shared edit endpoint)| `taskId` (required), editable props                       |
+| `planko_complete_task`  | Mark a task complete (status=2)         | `taskId` (required)                                       |
+| `planko_delete_task`    | Delete a task by id                     | `taskId` (required)                                       |
+| `planko_delete_note`    | Delete a note by id (shared endpoint)   | `taskId` (required)                                       |
+
+Folder-sync tools operate on the folders configured via `planko_setup` (stored in `~/.planko-mcp/config.json`). The CRUD tools operate directly via the `PLANKO_API_KEY`.
 
 ### Error handling
 
@@ -79,12 +94,16 @@ Env vars (`PLANKO_API_KEY`, `PLANKO_EMAIL`) are the primary config source. If se
 index.js (entry point, #!/usr/bin/env node, ESM)
   └── Server (stdio transport, @modelcontextprotocol/sdk)
         └── tools/
-              ├── planko_setup         → initialize sync config
-              ├── planko_pull          → pull remote → local
-              ├── planko_push          → push local → remote
-              ├── planko_status        → check sync state (human-readable)
+              ├── planko_setup         → initialize sync config (records syncType)
               ├── planko_sync_preview  → read-only diff summary with conflict detection
-              └── planko_sync          → execute pull then push
+              ├── planko_sync          → execute delete → pull → push
+              ├── planko_create_task   → create task (type=1) via API key
+              ├── planko_create_note   → create note (type=2) via API key
+              ├── planko_edit_task     → edit task by id
+              ├── planko_edit_note     → edit note by id (shared edit endpoint)
+              ├── planko_complete_task → mark task complete (status=2)
+              ├── planko_delete_task   → delete task by id
+              └── planko_delete_note   → delete note by id (shared endpoint)
 ```
 
 ## Step 5 — Configuration

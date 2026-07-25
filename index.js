@@ -24,6 +24,7 @@ import {
   blockNoteToMarkdown,
   markdownToBlockNote,
   descriptionToMarkdown,
+  markdownToDescription,
 } from './src/converters.js';
 import {
   readConfig,
@@ -71,9 +72,10 @@ function toolError(text) {
 async function computeSyncDiff(projectId, folder, sync) {
   const localFiles = listLocalFiles(folder);
   const { byFileName, byId } = buildIndexes(sync.tasks);
+  const syncType = sync.syncType;
 
   // Get ALL tasks from server (no mcpLastSyncDate filter) to detect deletions
-  const statusData = await api.status(projectId);
+  const statusData = await api.status(projectId, null, syncType);
   const remoteTasks = statusData.tasks || [];
   const remoteIdSet = new Set(remoteTasks.map((t) => t._id.toString()));
 
@@ -169,10 +171,11 @@ async function computeSyncDiff(projectId, folder, sync) {
 async function executeSync(projectId, folder, sync) {
   const localFiles = listLocalFiles(folder);
   const prePullSyncDate = sync.mcpLastSyncDate;
+  const syncType = sync.syncType;
   const results = [];
 
   // Get ALL tasks to detect deletions
-  const allStatusData = await api.status(projectId);
+  const allStatusData = await api.status(projectId, null, syncType);
   const allRemoteTasks = allStatusData.tasks || [];
   const remoteIdSet = new Set(allRemoteTasks.map((t) => t._id.toString()));
 
@@ -214,7 +217,7 @@ async function executeSync(projectId, folder, sync) {
   }
 
   if (toDeleteRemote.length > 0) {
-    const deleteResponse = await api.push(projectId, toDeleteRemote);
+    const deleteResponse = await api.push(projectId, toDeleteRemote, syncType);
     const deletedRemote = (deleteResponse.tasks || []).filter((t) => t.deleted);
     // Remove deleted tasks from sync state
     const deletedIds = new Set(deletedRemote.map((t) => t._id.toString()));
@@ -223,7 +226,7 @@ async function executeSync(projectId, folder, sync) {
   }
 
   // --- PULL phase ---
-  const pullData = await api.pull(projectId, prePullSyncDate);
+  const pullData = await api.pull(projectId, prePullSyncDate, syncType);
   const pulledTasks = pullData.tasks || [];
 
   const { byId } = buildIndexes(sync.tasks);
@@ -308,7 +311,7 @@ async function executeSync(projectId, folder, sync) {
       });
     }
 
-    const pushResponse = await api.push(projectId, pushItems);
+    const pushResponse = await api.push(projectId, pushItems, syncType);
     const responseTasks = (pushResponse.tasks || []).filter((t) => !t.deleted);
 
     const { byId: pushIdIdx, byFileName: pushFnIdx } = buildIndexes(sync.tasks);
@@ -363,13 +366,16 @@ const server = new McpServer({
 // ---- planko_setup ----
 server.tool(
   'planko_setup',
-  'Set up sync between a Planko project and a local folder. Supports multiple project-folder mappings. The user must provide the project name, local folder path, and email.',
+  'Set up sync between a Planko project and a local folder. Supports multiple project-folder mappings. The user must provide the project name, local folder path, email, and whether the folder syncs tasks or notes.',
   {
     projectName: z.string().describe('Name of the Planko project to sync'),
     folderPath: z.string().describe('Absolute path to the local folder for .md task files'),
     email: z.string().email().describe('User email for task attribution'),
+    syncType: z
+      .enum(['tasks', 'notes'])
+      .describe("Whether this folder syncs 'tasks' (type=1) or 'notes' (type=2)"),
   },
-  async ({ projectName, folderPath, email }) => {
+  async ({ projectName, folderPath, email, syncType }) => {
     try {
       // List user's projects to find the matching one
       const { projects } = await api.projects();
@@ -390,6 +396,8 @@ server.tool(
         mkdirSync(folderPath, { recursive: true });
       }
 
+      const type = syncType === 'notes' ? 2 : 1;
+
       // Save to global config
       const config = readConfig();
       config.projects = config.projects || {};
@@ -398,20 +406,24 @@ server.tool(
         folder: folderPath,
         email,
         isWorkspace: match.isWorkspace,
+        type,
       };
       writeConfig(config);
 
       // Initialize sync state for this folder
-      const syncState = createSyncState(match._id, match.name);
+      const syncState = createSyncState(match._id, match.name, type);
       writeSyncState(folderPath, syncState);
+
+      const typeLabel = type === 2 ? 'Notes' : 'Tasks';
 
       return toolOk(
         `Setup complete for project "${match.name}".\n` +
           `  Project ID: ${match._id}\n` +
           `  Folder: ${folderPath}\n` +
           `  Email: ${email}\n` +
+          `  Syncs: ${typeLabel} (type=${type})\n` +
           `  Workspace: ${match.isWorkspace ? 'Yes' : 'No (personal)'}\n\n` +
-          `Run planko_sync to pull tasks into this folder.`
+          `Run planko_sync to pull ${typeLabel.toLowerCase()} into this folder.`
       );
     } catch (err) {
       return toolError(`Setup failed: ${err.message}`);
@@ -540,7 +552,8 @@ server.tool(
       for (const target of targets) {
         let sync = readSyncState(target.folder);
         if (!sync) {
-          sync = createSyncState(target.projectId, target.name);
+          // target.type is undefined for pre-feature config entries → legacy type-agnostic sync.
+          sync = createSyncState(target.projectId, target.name, target.type);
         }
 
         allResults.push(`--- ${target.name} (${target.folder}) ---`);
@@ -557,6 +570,281 @@ server.tool(
       return toolOk('Sync complete.\n\n' + allResults.join('\n'));
     } catch (err) {
       return toolError(`Sync failed: ${err.message}`);
+    }
+  }
+);
+
+// --- Standalone CRUD tools (Part B) ---
+// These operate directly via the user-scoped API key and do NOT require any
+// folder to be configured with planko_setup. Notes are Task docs with type=2;
+// tasks are type=1. Edit/Delete work on both; Complete is task-oriented.
+
+const objectId = z
+  .string()
+  .regex(/^[a-fA-F\d]{24}$/, 'Must be a 24-character hex ObjectId');
+
+const timeRegex = /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/;
+
+// Shared editable task/note properties (all optional). `description` is Markdown
+// here and is converted to BlockNote JSON before being sent to the backend.
+const taskProps = {
+  description: z
+    .string()
+    .optional()
+    .describe('Body as Markdown (converted to BlockNote JSON before saving)'),
+  dueDate: z.string().optional().describe('Due date (ISO 8601 string)'),
+  datePlain: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD')
+    .optional()
+    .describe('Plain date, YYYY-MM-DD'),
+  time: z.string().regex(timeRegex, 'Must be HH:MM').optional().describe('Start time, HH:MM'),
+  endTime: z.string().regex(timeRegex, 'Must be HH:MM').optional().describe('End time, HH:MM'),
+  alert: z.boolean().optional().describe('Whether an alert/reminder is enabled'),
+  alertLeadTime: z
+    .enum(['ontime', '15min', '30min', '1hour', '1day'])
+    .nullable()
+    .optional()
+    .describe('Reminder lead time (null or one of ontime/15min/30min/1hour/1day)'),
+  priority: z
+    .union([z.literal(1), z.literal(2), z.literal(3)])
+    .optional()
+    .describe('Priority: 1, 2, or 3'),
+  repeat: z
+    .enum(['daily', 'workdays', 'weekly', 'biweekly', 'monthly', 'custom_weekly', 'yearly'])
+    .nullable()
+    .optional()
+    .describe('Recurrence rule (null or one of the recurrence keywords)'),
+  repeatDate: z.string().optional().describe('Recurrence end/anchor date (ISO 8601 string)'),
+  selectedWeekdays: z
+    .array(z.number().int().min(0).max(6))
+    .optional()
+    .describe('Weekdays for custom_weekly repeat (0=Sunday..6=Saturday)'),
+  parentId: objectId.optional().describe('Parent task id (for subtasks)'),
+  tags: z.array(objectId).optional().describe('Array of tag ids'),
+  kanbanColumnId: objectId.optional().describe('Kanban column id'),
+  boardId: objectId.optional().describe('Board id'),
+};
+
+/**
+ * Build a request body from tool params: drop undefined values and convert the
+ * Markdown `description` into BlockNote JSON.
+ */
+function buildTaskBody(params) {
+  const body = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined) continue;
+    body[key] = value;
+  }
+  if ('description' in body) {
+    body.description = markdownToDescription(body.description);
+  }
+  return body;
+}
+
+/**
+ * Resolve a project name to a project id via the user's accessible projects
+ * (NOT the local folder config), so create tools work without any setup.
+ */
+async function resolveProjectId(projectName) {
+  const { projects } = await api.projects();
+  const match = projects.find(
+    (p) => p.name.toLowerCase() === projectName.toLowerCase()
+  );
+  if (!match) {
+    const available = projects.map((p) => `  - ${p.name}`).join('\n');
+    throw new Error(
+      `Project "${projectName}" not found.\n\nAvailable projects:\n${available}`
+    );
+  }
+  return match._id;
+}
+
+/** Extract { id, name } from a create/edit response (shape-tolerant). */
+function describeTask(res) {
+  const t = (res && (res.task || res.data)) || res || {};
+  return {
+    id: t._id || t.id || 'unknown',
+    name: t.name != null ? t.name : 'unknown',
+  };
+}
+
+/**
+ * Shared create handler for tasks (type=1) and notes (type=2).
+ */
+async function handleCreate(type, params, kindLabel) {
+  const { name, projectName, ...rest } = params;
+  const body = buildTaskBody(rest);
+  body.name = name;
+  body.type = type;
+
+  // Resolve projectName -> projectId via the API. When omitted, OMIT the key
+  // entirely so the backend applies the user's default project.
+  if (projectName) {
+    body.projectId = await resolveProjectId(projectName);
+  }
+
+  const res = await api.createTask(body);
+  const { id, name: savedName } = describeTask(res);
+  const where = body.projectId
+    ? ` in project ${body.projectId}`
+    : ' in your default project';
+  return toolOk(`Created ${kindLabel} "${savedName}" (id: ${id})${where}.`);
+}
+
+/**
+ * Shared edit handler for tasks and notes (same endpoint).
+ */
+async function handleEdit(params, kindLabel) {
+  const { taskId, ...rest } = params;
+  const body = buildTaskBody(rest);
+  const changed = Object.keys(body);
+  if (changed.length === 0) {
+    return toolError('Nothing to update: provide at least one field to change.');
+  }
+  const res = await api.updateTask(taskId, body);
+  const { id, name: savedName } = describeTask(res);
+  return toolOk(
+    `Updated ${kindLabel} "${savedName}" (id: ${id}). Changed: ${changed.join(', ')}.`
+  );
+}
+
+// ---- planko_create_task ----
+server.tool(
+  'planko_create_task',
+  'Create a Planko task (type=1) directly via your API key. Works without any folder setup. Provide a name (required); all other properties are optional. Optionally target a project by name (otherwise your default project is used).',
+  {
+    name: z.string().describe('Task name (required)'),
+    projectName: z
+      .string()
+      .optional()
+      .describe('Project name to create the task in (optional — omit for your default project)'),
+    ...taskProps,
+  },
+  async (params) => {
+    try {
+      return await handleCreate(1, params, 'task');
+    } catch (err) {
+      return toolError(`Create task failed: ${err.message}`);
+    }
+  }
+);
+
+// ---- planko_create_note ----
+server.tool(
+  'planko_create_note',
+  'Create a Planko note (type=2) directly via your API key. Works without any folder setup. Provide a name (required); all other properties are optional. Optionally target a project by name (otherwise your default project is used).',
+  {
+    name: z.string().describe('Note name (required)'),
+    projectName: z
+      .string()
+      .optional()
+      .describe('Project name to create the note in (optional — omit for your default project)'),
+    ...taskProps,
+  },
+  async (params) => {
+    try {
+      return await handleCreate(2, params, 'note');
+    } catch (err) {
+      return toolError(`Create note failed: ${err.message}`);
+    }
+  }
+);
+
+// ---- planko_edit_task ----
+server.tool(
+  'planko_edit_task',
+  'Edit an existing Planko task by id. Provide the taskId and any properties to change. The Markdown description is converted to BlockNote JSON.',
+  {
+    taskId: objectId.describe('Id of the task to edit (required)'),
+    name: z.string().optional().describe('New task name'),
+    type: z
+      .union([z.literal(1), z.literal(2)])
+      .optional()
+      .describe('Change type: 1=task, 2=note'),
+    projectId: objectId.optional().describe('Move to a different project by id'),
+    ...taskProps,
+  },
+  async (params) => {
+    try {
+      return await handleEdit(params, 'task');
+    } catch (err) {
+      return toolError(`Edit task failed: ${err.message}`);
+    }
+  }
+);
+
+// ---- planko_edit_note ----
+server.tool(
+  'planko_edit_note',
+  'Edit an existing Planko note by id (shares the task edit endpoint). Provide the taskId and any properties to change. The Markdown description is converted to BlockNote JSON.',
+  {
+    taskId: objectId.describe('Id of the note to edit (required)'),
+    name: z.string().optional().describe('New note name'),
+    type: z
+      .union([z.literal(1), z.literal(2)])
+      .optional()
+      .describe('Change type: 1=task, 2=note'),
+    projectId: objectId.optional().describe('Move to a different project by id'),
+    ...taskProps,
+  },
+  async (params) => {
+    try {
+      return await handleEdit(params, 'note');
+    } catch (err) {
+      return toolError(`Edit note failed: ${err.message}`);
+    }
+  }
+);
+
+// ---- planko_complete_task ----
+server.tool(
+  'planko_complete_task',
+  'Mark a Planko task complete (status=2) by id.',
+  {
+    taskId: objectId.describe('Id of the task to complete (required)'),
+  },
+  async ({ taskId }) => {
+    try {
+      const res = await api.completeTask(taskId);
+      const { id, name } = describeTask(res);
+      return toolOk(`Completed task "${name}" (id: ${id}).`);
+    } catch (err) {
+      return toolError(`Complete task failed: ${err.message}`);
+    }
+  }
+);
+
+// ---- planko_delete_task ----
+server.tool(
+  'planko_delete_task',
+  'Delete a Planko task by id.',
+  {
+    taskId: objectId.describe('Id of the task to delete (required)'),
+  },
+  async ({ taskId }) => {
+    try {
+      await api.deleteTask(taskId);
+      return toolOk(`Deleted task (id: ${taskId}).`);
+    } catch (err) {
+      return toolError(`Delete task failed: ${err.message}`);
+    }
+  }
+);
+
+// ---- planko_delete_note ----
+server.tool(
+  'planko_delete_note',
+  'Delete a Planko note by id (shares the task delete endpoint).',
+  {
+    taskId: objectId.describe('Id of the note to delete (required)'),
+  },
+  async ({ taskId }) => {
+    try {
+      await api.deleteTask(taskId);
+      return toolOk(`Deleted note (id: ${taskId}).`);
+    } catch (err) {
+      return toolError(`Delete note failed: ${err.message}`);
     }
   }
 );

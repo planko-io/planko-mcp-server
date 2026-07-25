@@ -51,35 +51,74 @@ export function createApiClient({ apiKey, apiBase }) {
     },
 
     /**
-     * GET /mcp-project-sync/status?projectId=...&mcpLastSyncDate=...
+     * GET /mcp-project-sync/status?projectId=...&mcpLastSyncDate=...&type=...
+     * `type` (1=tasks, 2=notes) is appended whenever set, independent of mcpLastSyncDate.
      */
-    async status(projectId, mcpLastSyncDate) {
+    async status(projectId, mcpLastSyncDate, type) {
       let qs = `projectId=${projectId}`;
       if (mcpLastSyncDate != null) {
         qs += `&mcpLastSyncDate=${mcpLastSyncDate}`;
+      }
+      if (type === 1 || type === 2) {
+        qs += `&type=${type}`;
       }
       return request('GET', `/mcp-project-sync/status?${qs}`);
     },
 
     /**
-     * GET /mcp-project-sync/pull?projectId=...&mcpLastSyncDate=...
+     * GET /mcp-project-sync/pull?projectId=...&mcpLastSyncDate=...&type=...
      */
-    async pull(projectId, mcpLastSyncDate) {
+    async pull(projectId, mcpLastSyncDate, type) {
       let qs = `projectId=${projectId}`;
       if (mcpLastSyncDate != null) {
         qs += `&mcpLastSyncDate=${mcpLastSyncDate}`;
+      }
+      if (type === 1 || type === 2) {
+        qs += `&type=${type}`;
       }
       return request('GET', `/mcp-project-sync/pull?${qs}`);
     },
 
     /**
      * POST /mcp-project-sync/push
+     * `type` (1=tasks, 2=notes) is included in the body whenever set.
      */
-    async push(projectId, tasks) {
-      return request('POST', '/mcp-project-sync/push', {
-        projectId,
-        tasks,
-      });
+    async push(projectId, tasks, type) {
+      const body = { projectId, tasks };
+      if (type === 1 || type === 2) {
+        body.type = type;
+      }
+      return request('POST', '/mcp-project-sync/push', body);
+    },
+
+    // --- Standalone CRUD (user-scoped, no folder sync required) ---
+
+    /**
+     * POST /mcp-project-sync/tasks — create a task (type=1) or note (type=2).
+     */
+    async createTask(body) {
+      return request('POST', '/mcp-project-sync/tasks', body);
+    },
+
+    /**
+     * PATCH /mcp-project-sync/tasks/:taskId — edit a task or note.
+     */
+    async updateTask(taskId, body) {
+      return request('PATCH', `/mcp-project-sync/tasks/${taskId}`, body);
+    },
+
+    /**
+     * POST /mcp-project-sync/tasks/:taskId/complete — mark complete (status=2).
+     */
+    async completeTask(taskId) {
+      return request('POST', `/mcp-project-sync/tasks/${taskId}/complete`);
+    },
+
+    /**
+     * DELETE /mcp-project-sync/tasks/:taskId — delete a task or note.
+     */
+    async deleteTask(taskId) {
+      return request('DELETE', `/mcp-project-sync/tasks/${taskId}`);
     },
   };
 }
