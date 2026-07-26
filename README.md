@@ -230,7 +230,12 @@ When set, it changes behavior as follows:
   locked project; any `projectName` the caller passes is ignored (and not resolved).
 - **List** (`list_tasks` / `list_notes`): always scoped to the locked project
   (ignoring `projectName`/`projectId`), which yields the all-members listing for
-  that project. Combine with `assigneeId` to narrow to one member.
+  that project. The `priority`, `projectName`, `projectId`, `assigneeId` and
+  `parentId` filters are **not offered** under a lock (and dropped if forced) —
+  GPT-class callers reliably fabricate them with plausible-but-wrong non-blank
+  values that silently zero the result. Narrow to one member with **`assigneeName`**
+  (their name/email, matched client-side against the owner) instead; omit it for
+  all members.
 - **Edit** (`edit_task` / `edit_note`): if the caller supplies a `projectId`, it is
   forced back to the locked project (an edit can never move a task out of it). If no
   project field is supplied, the project is left unchanged.

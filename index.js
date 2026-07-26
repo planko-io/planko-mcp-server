@@ -26,6 +26,9 @@ import {
   sanitizeFilters,
   ownerName,
   assertProjectAllowed,
+  stripHallucinatedListFilters,
+  matchesAssignee,
+  hasOwnerInfo,
 } from './src/projectLock.js';
 import {
   blockNoteToMarkdown,
@@ -922,15 +925,20 @@ function formatTags(tags) {
 
 /** Build the API filter params from tool params, resolving projectName. */
 async function buildListParams(type, params) {
-  const { projectName, ...rest } = params;
+  // assigneeName is a client-side member filter (see applyAssigneeName); never
+  // forward it to the backend, which doesn't know that key.
+  const { projectName, assigneeName, ...rest } = params;
   // Sanitize scalar filters (drops blank/placeholder values, incl. a blank
-  // assigneeId => "all members"). projectId/assigneeId pass through here.
+  // assigneeId => "all members").
   const out = { type, ...sanitizeFilters(rest) };
   if (PROJECT_LOCK) {
+    // Drop the id/priority narrowers this class of agent fabricates with
+    // non-blank garbage (parentId=projectId, assigneeId from a chat id, guessed
+    // priority) that would silently zero the "list the whole team" result.
+    stripHallucinatedListFilters(out);
     // Hard override: force the project regardless of caller input. Do NOT
     // resolve projectName here — the override wins unconditionally, so an
-    // invalid projectName must not be able to fail an otherwise-locked list
-    // (keeps list consistent with create, which also ignores projectName).
+    // invalid projectName must not be able to fail an otherwise-locked list.
     out.projectId = lockProjectId(PROJECT_LOCK, out.projectId);
   } else if (!isBlankValue(projectName)) {
     // Unlocked (default) path: unchanged behavior.
@@ -1032,35 +1040,88 @@ const listLimit = z
   .optional()
   .describe('Max items to return (default 50, max 200)');
 const listPage = z.number().int().min(1).optional().describe('Page number (default 1)');
+const listPriority = z
+  .union([z.literal(1), z.literal(2), z.literal(3)])
+  .optional()
+  .describe('Filter by priority: 1, 2, or 3');
+const listParentId = objectId.optional().describe('List subtasks of this parent task id');
+const listAssigneeName = z
+  .string()
+  .optional()
+  .describe(
+    'Narrow to ONE team member by their NAME or email (case-insensitive). ' +
+      'Omit to list the WHOLE team (all members). Only set this when the user ' +
+      'explicitly names a person; never guess.'
+  );
+
+// Build the list-filter schema. Under PROJECT_LOCK the project is forced and the
+// caller is a bespoke, project-scoped agent whose model fabricates id/priority
+// narrowers (parentId/assigneeId/priority) that silently zero the result — so
+// those fields are NOT offered; member narrowing is by NAME (assigneeName)
+// instead. Unlocked (default, e.g. clawis) keeps the full, unchanged surface.
+function listSchema(kind /* 'task' | 'note' */) {
+  const base = { showCompleted: listShowCompleted };
+  if (kind === 'task') base.status = listStatus;
+  const tail = {
+    tags: listTags,
+    search: listSearch,
+    ...(kind === 'task'
+      ? {
+          dueDateFrom: datePlain.optional().describe('Inclusive lower bound on due date (YYYY-MM-DD)'),
+          dueDateTo: datePlain.optional().describe('Inclusive upper bound on due date (YYYY-MM-DD)'),
+        }
+      : {}),
+    sortBy: listSortBy,
+    limit: listLimit,
+    page: listPage,
+  };
+  if (PROJECT_LOCK) {
+    return { ...base, assigneeName: listAssigneeName, ...tail };
+  }
+  return {
+    ...base,
+    priority: listPriority,
+    projectName: listProjectName,
+    projectId: listProjectId,
+    assigneeId: listAssigneeId,
+    ...(kind === 'task' ? { parentId: listParentId } : {}),
+    ...tail,
+  };
+}
+
+/**
+ * Client-side member narrowing by NAME (used under PROJECT_LOCK, where the
+ * agent narrows by a person's name instead of a fabricated user id). Returns
+ * { result, note }. When assigneeName is blank, the result is unchanged. When
+ * items lack populated owner info (backend owner-populate not deployed yet),
+ * the filter can't be applied — the full list is returned with an explanatory
+ * note rather than a misleading empty result.
+ */
+function applyAssigneeName(result, assigneeName) {
+  if (isBlankValue(assigneeName)) return { result, note: null };
+  const tasks = Array.isArray(result?.tasks) ? result.tasks : [];
+  if (!hasOwnerInfo(tasks)) {
+    return {
+      result,
+      note: `Could not narrow to "${assigneeName}" — owner info is not available yet; showing all members.`,
+    };
+  }
+  const filtered = tasks.filter((t) => matchesAssignee(t.userId, assigneeName));
+  return { result: { ...result, tasks: filtered, total: filtered.length }, note: null };
+}
 
 // ---- planko_list_tasks ----
 server.tool(
   'planko_list_tasks',
-  'List your Planko tasks (type=1) via your API key, no folder setup required. Filters are optional. Without projectId/projectName the list is scoped to your own tasks; with a project it includes that project\'s (incl. workspace-shared) tasks. Note: recurring tasks appear as separate dated occurrences. Returns a concise summary, not raw JSON.',
-  {
-    status: listStatus,
-    showCompleted: listShowCompleted,
-    priority: z
-      .union([z.literal(1), z.literal(2), z.literal(3)])
-      .optional()
-      .describe('Filter by priority: 1, 2, or 3'),
-    projectName: listProjectName,
-    projectId: listProjectId,
-    assigneeId: listAssigneeId,
-    parentId: objectId.optional().describe('List subtasks of this parent task id'),
-    tags: listTags,
-    search: listSearch,
-    dueDateFrom: datePlain.optional().describe('Inclusive lower bound on due date (YYYY-MM-DD)'),
-    dueDateTo: datePlain.optional().describe('Inclusive upper bound on due date (YYYY-MM-DD)'),
-    sortBy: listSortBy,
-    limit: listLimit,
-    page: listPage,
-  },
+  'List Planko tasks (type=1) via your API key, no folder setup required. All filters are optional; omit any the user did not explicitly ask for. Recurring tasks appear as separate dated occurrences. Returns a concise summary, not raw JSON.',
+  listSchema('task'),
   async (params) => {
     try {
       const apiParams = await buildListParams(1, params);
       const result = await api.listTasks(apiParams);
-      return toolOk(renderList(result, 'tasks'));
+      const { result: filtered, note } = applyAssigneeName(result, params.assigneeName);
+      const out = renderList(filtered, 'tasks');
+      return toolOk(note ? `${out}\n\nNote: ${note}` : out);
     } catch (err) {
       return toolError(`List tasks failed: ${err.message}`);
     }
@@ -1070,23 +1131,15 @@ server.tool(
 // ---- planko_list_notes ----
 server.tool(
   'planko_list_notes',
-  'List your Planko notes (type=2) via your API key, no folder setup required. Filters are optional. Without projectId/projectName the list is scoped to your own notes; with a project it includes that project\'s (incl. workspace-shared) notes. Deleted and recurring-copy notes are excluded. Returns a concise summary, not raw JSON.',
-  {
-    showCompleted: listShowCompleted,
-    projectName: listProjectName,
-    projectId: listProjectId,
-    assigneeId: listAssigneeId,
-    tags: listTags,
-    search: listSearch,
-    sortBy: listSortBy,
-    limit: listLimit,
-    page: listPage,
-  },
+  'List Planko notes (type=2) via your API key, no folder setup required. All filters are optional; omit any the user did not explicitly ask for. Deleted and recurring-copy notes are excluded. Returns a concise summary, not raw JSON.',
+  listSchema('note'),
   async (params) => {
     try {
       const apiParams = await buildListParams(2, params);
       const result = await api.listTasks(apiParams);
-      return toolOk(renderList(result, 'notes'));
+      const { result: filtered, note } = applyAssigneeName(result, params.assigneeName);
+      const out = renderList(filtered, 'notes');
+      return toolOk(note ? `${out}\n\nNote: ${note}` : out);
     } catch (err) {
       return toolError(`List notes failed: ${err.message}`);
     }

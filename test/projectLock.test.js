@@ -4,10 +4,71 @@ import {
   sanitizeFilters,
   ownerName,
   assertProjectAllowed,
+  stripHallucinatedListFilters,
+  matchesAssignee,
+  hasOwnerInfo,
 } from '../src/projectLock.js';
 import { ZERO_OBJECT_ID } from '../src/sanitize.js';
 
 const LOCK = '6742635e764bda007ab987ed'; // the "planko" project id
+
+describe('stripHallucinatedListFilters (the "0 tasks always" bug)', () => {
+  it('drops parentId/assigneeId/priority that GPT fabricates as non-blank garbage', () => {
+    const out = {
+      type: 1,
+      status: 1,
+      projectId: LOCK,
+      priority: 1, // guessed
+      parentId: LOCK, // copied the project id -> zeroed every query
+      assigneeId: '8222653984433766701a0000', // derived from a chat user id
+      dueDateFrom: '2026-07-27',
+    };
+    stripHallucinatedListFilters(out);
+    expect(out.parentId).toBeUndefined();
+    expect(out.assigneeId).toBeUndefined();
+    expect(out.priority).toBeUndefined();
+    // real filters survive
+    expect(out).toMatchObject({ type: 1, status: 1, projectId: LOCK, dueDateFrom: '2026-07-27' });
+  });
+
+  it('is a no-op when none are present', () => {
+    const out = { type: 1, status: 1, projectId: LOCK };
+    stripHallucinatedListFilters(out);
+    expect(out).toEqual({ type: 1, status: 1, projectId: LOCK });
+  });
+});
+
+describe('matchesAssignee (member narrowing by name)', () => {
+  const vitor = { _id: 'a1', name: 'Vitor Fonseca', email: 'sfz.vitor@gmail.com' };
+  const other = { _id: 'b2', name: 'Rafael Souza', email: 'rafael@planko.io' };
+
+  it('keeps everyone when the needle is blank (default = all members)', () => {
+    expect(matchesAssignee(vitor, '')).toBe(true);
+    expect(matchesAssignee(vitor, undefined)).toBe(true);
+    expect(matchesAssignee(vitor, ZERO_OBJECT_ID)).toBe(true);
+  });
+
+  it('matches on name or email, case-insensitively', () => {
+    expect(matchesAssignee(vitor, 'vitor')).toBe(true);
+    expect(matchesAssignee(vitor, 'FONSECA')).toBe(true);
+    expect(matchesAssignee(vitor, 'sfz.vitor@gmail.com')).toBe(true);
+    expect(matchesAssignee(other, 'vitor')).toBe(false);
+  });
+
+  it('does not match a non-blank needle when userId is a bare id (no owner info)', () => {
+    expect(matchesAssignee('a1b2c3d4e5f6a1b2c3d4e5f6', 'vitor')).toBe(false);
+  });
+});
+
+describe('hasOwnerInfo', () => {
+  it('true when any item carries a populated owner', () => {
+    expect(hasOwnerInfo([{ userId: 'bareid' }, { userId: { name: 'Vitor' } }])).toBe(true);
+  });
+  it('false when all items have bare-id/absent owners (pre owner-populate deploy)', () => {
+    expect(hasOwnerInfo([{ userId: 'bareid' }, { userId: null }, {}])).toBe(false);
+    expect(hasOwnerInfo([])).toBe(false);
+  });
+});
 
 describe('lockProjectId', () => {
   it('overrides the requested projectId when the lock is set (create/list hard override)', () => {

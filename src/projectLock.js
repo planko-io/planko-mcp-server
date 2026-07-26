@@ -79,3 +79,46 @@ export function assertProjectAllowed(lock, task) {
     throw new Error('This agent is restricted to the "planko" project.');
   }
 }
+
+/**
+ * Under a project lock, LLM tool-callers (esp. GPT-class) reliably fabricate
+ * these narrowing filters with plausible-but-wrong NON-blank values that
+ * isBlankValue cannot catch: a 24-hex `parentId` copied from the project id, an
+ * `assigneeId` derived from a chat user id, a guessed `priority`. Any of these
+ * silently narrows a "list the whole team" query to zero. A locked agent's job
+ * is "list everyone unless a member is named", and it cannot supply these
+ * reliably, so they are dropped from both the tool schema and (defensively) the
+ * API params. Member narrowing is done by NAME client-side (see matchesAssignee).
+ */
+export const HALLUCINATED_LIST_FILTERS = ['parentId', 'assigneeId', 'priority'];
+
+/** Delete the fabrication-prone narrowing filters from an API param bag. */
+export function stripHallucinatedListFilters(params) {
+  for (const key of HALLUCINATED_LIST_FILTERS) delete params[key];
+  return params;
+}
+
+/**
+ * Client-side member filter by NAME (or email substring), case-insensitive.
+ * Returns true (keep) when `needle` is blank (no narrowing) so the default is
+ * "all members". Compares against the populated owner {name,email}; a bare-id
+ * userId has no name/email and won't match a non-blank needle.
+ */
+export function matchesAssignee(userId, needle) {
+  if (isBlankValue(needle)) return true;
+  const owner = ownerName(userId);
+  const email =
+    userId && typeof userId === 'object' && typeof userId.email === 'string'
+      ? userId.email
+      : '';
+  const hay = `${owner || ''} ${email}`.toLowerCase();
+  return hay.includes(String(needle).trim().toLowerCase());
+}
+
+/** True when at least one item carries populated owner info (name/email). */
+export function hasOwnerInfo(items) {
+  return (
+    Array.isArray(items) &&
+    items.some((it) => it && ownerName(it.userId) !== null)
+  );
+}
