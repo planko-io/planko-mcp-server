@@ -38,7 +38,7 @@ Move these from `scripts/planko-mcp-sync.js` into ESM modules inside the package
 
 ## Step 3 — Define MCP Tools
 
-**As shipped**, the server exposes 14 tools: 3 folder-sync tools + 7 standalone CRUD tools + 4 standalone read tools. (The earlier `planko_pull`/`planko_push`/`planko_status` were folded into the bidirectional `planko_sync`/`planko_sync_preview`.)
+**As shipped**, the server exposes 20 tools: 3 folder-sync tools + 10 standalone CRUD tools + 7 standalone read tools. (The earlier `planko_pull`/`planko_push`/`planko_status` were folded into the bidirectional `planko_sync`/`planko_sync_preview`.) Since v0.6.0 every CRUD/read tool exists for tasks (type=1), notes (type=2) and sticky notes (type=3), `planko_list_all` lists the three kinds together, and list tools filter by kanban board/column (by name, resolved via `GET /mcp-project-sync/boards`, or by id). The README is the up-to-date tool reference.
 
 Folder-sync tools:
 

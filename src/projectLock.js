@@ -90,7 +90,13 @@ export function assertProjectAllowed(lock, task) {
  * reliably, so they are dropped from both the tool schema and (defensively) the
  * API params. Member narrowing is done by NAME client-side (see matchesAssignee).
  */
-export const HALLUCINATED_LIST_FILTERS = ['parentId', 'assigneeId', 'priority'];
+export const HALLUCINATED_LIST_FILTERS = [
+  'parentId',
+  'assigneeId',
+  'priority',
+  'boardId',
+  'kanbanColumnId',
+];
 
 /** Delete the fabrication-prone narrowing filters from an API param bag. */
 export function stripHallucinatedListFilters(params) {

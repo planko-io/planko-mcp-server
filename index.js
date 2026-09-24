@@ -8,9 +8,11 @@
  *   PLANKO_API_BASE — optional API base URL override
  *
  * Tools:
- *   planko_setup        — Configure sync for a project folder
- *   planko_sync_preview — Preview what would be synced
- *   planko_sync         — Execute bidirectional sync with delete support
+ *   planko_setup / planko_sync_preview / planko_sync — folder sync
+ *   planko_create_* / planko_edit_* / planko_delete_* / planko_view_* / planko_list_*
+ *     for tasks (type=1), notes (type=2) and sticky notes (type=3)
+ *   planko_complete_task — works on any item id
+ *   planko_list_all — tasks + sticky notes + notes in one listing
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -18,13 +20,23 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { createRequire } from 'node:module';
 
 import { createApiClient } from './src/api.js';
+import {
+  TYPE_TASK,
+  TYPE_NOTE,
+  TYPE_STICKY,
+  resolveBoardFilters,
+  renderList,
+  renderItem,
+  mergeAllLists,
+  renderAll,
+} from './src/listing.js';
 import { isBlankValue, applyDueDateFallback } from './src/sanitize.js';
 import {
   lockProjectId,
   sanitizeFilters,
-  ownerName,
   assertProjectAllowed,
   stripHallucinatedListFilters,
   matchesAssignee,
@@ -373,9 +385,11 @@ async function executeSync(projectId, folder, sync) {
 
 // --- MCP Server ---
 
+const { version: PKG_VERSION } = createRequire(import.meta.url)('./package.json');
+
 const server = new McpServer({
   name: 'planko-mcp-server',
-  version: '0.5.0',
+  version: PKG_VERSION,
 });
 
 // ---- planko_setup ----
@@ -591,8 +605,14 @@ server.tool(
 
 // --- Standalone CRUD tools (Part B) ---
 // These operate directly via the user-scoped API key and do NOT require any
-// folder to be configured with planko_setup. Notes are Task docs with type=2;
-// tasks are type=1. Edit/Delete work on both; Complete is task-oriented.
+// folder to be configured with planko_setup. Notes are Task docs with type=2,
+// sticky notes type=3, tasks type=1. Edit/Delete/View work on any of them;
+// Complete is task-oriented but accepts any id.
+
+const editableType = z
+  .union([z.literal(1), z.literal(2), z.literal(3)])
+  .optional()
+  .describe('Change type: 1=task, 2=note, 3=sticky note');
 
 const objectId = z
   .string()
@@ -763,7 +783,7 @@ server.tool(
   },
   async (params) => {
     try {
-      return await handleCreate(1, params, 'task');
+      return await handleCreate(TYPE_TASK, params, 'task');
     } catch (err) {
       return toolError(`Create task failed: ${err.message}`);
     }
@@ -784,9 +804,30 @@ server.tool(
   },
   async (params) => {
     try {
-      return await handleCreate(2, params, 'note');
+      return await handleCreate(TYPE_NOTE, params, 'note');
     } catch (err) {
       return toolError(`Create note failed: ${err.message}`);
+    }
+  }
+);
+
+// ---- planko_create_sticky_note ----
+server.tool(
+  'planko_create_sticky_note',
+  'Create a Planko sticky note (type=3) directly via your API key. A sticky note is a task-page item with every task property (dates, priority, tags, kanban column). Provide a name (required); all other properties are optional. Optionally target a project by name (otherwise your default project is used).',
+  {
+    name: z.string().describe('Sticky note name (required)'),
+    projectName: z
+      .string()
+      .optional()
+      .describe('Project name to create the sticky note in (optional — omit for your default project)'),
+    ...taskProps,
+  },
+  async (params) => {
+    try {
+      return await handleCreate(TYPE_STICKY, params, 'sticky note');
+    } catch (err) {
+      return toolError(`Create sticky note failed: ${err.message}`);
     }
   }
 );
@@ -798,10 +839,7 @@ server.tool(
   {
     taskId: objectId.describe('Id of the task to edit (required)'),
     name: z.string().optional().describe('New task name'),
-    type: z
-      .union([z.literal(1), z.literal(2)])
-      .optional()
-      .describe('Change type: 1=task, 2=note'),
+    type: editableType,
     projectId: objectId.optional().describe('Move to a different project by id'),
     ...taskProps,
   },
@@ -821,10 +859,7 @@ server.tool(
   {
     taskId: objectId.describe('Id of the note to edit (required)'),
     name: z.string().optional().describe('New note name'),
-    type: z
-      .union([z.literal(1), z.literal(2)])
-      .optional()
-      .describe('Change type: 1=task, 2=note'),
+    type: editableType,
     projectId: objectId.optional().describe('Move to a different project by id'),
     ...taskProps,
   },
@@ -837,10 +872,30 @@ server.tool(
   }
 );
 
+// ---- planko_edit_sticky_note ----
+server.tool(
+  'planko_edit_sticky_note',
+  'Edit an existing Planko sticky note by id (shares the task edit endpoint). Provide the taskId and any properties to change. The Markdown description is converted to BlockNote JSON.',
+  {
+    taskId: objectId.describe('Id of the sticky note to edit (required)'),
+    name: z.string().optional().describe('New sticky note name'),
+    type: editableType,
+    projectId: objectId.optional().describe('Move to a different project by id'),
+    ...taskProps,
+  },
+  async (params) => {
+    try {
+      return await handleEdit(params, 'sticky note');
+    } catch (err) {
+      return toolError(`Edit sticky note failed: ${err.message}`);
+    }
+  }
+);
+
 // ---- planko_complete_task ----
 server.tool(
   'planko_complete_task',
-  'Mark a Planko task complete (status=2) by id.',
+  'Mark a Planko task complete (status=2) by id. Also works on a sticky note id (sticky notes have the same status field).',
   {
     taskId: objectId.describe('Id of the task to complete (required)'),
   },
@@ -892,10 +947,29 @@ server.tool(
   }
 );
 
+// ---- planko_delete_sticky_note ----
+server.tool(
+  'planko_delete_sticky_note',
+  'Delete a Planko sticky note by id (shares the task delete endpoint).',
+  {
+    taskId: objectId.describe('Id of the sticky note to delete (required)'),
+  },
+  async ({ taskId }) => {
+    try {
+      await assertTaskInLock(taskId);
+      await api.deleteTask(taskId);
+      return toolOk(`Deleted sticky note (id: ${taskId}).`);
+    } catch (err) {
+      return toolError(`Delete sticky note failed: ${err.message}`);
+    }
+  }
+);
+
 // --- Standalone READ tools (Part C) ---
 // Read-only, user-scoped via API key; no folder setup required. List tools send
-// `type` (1=tasks, 2=notes) and parametrized filters; view tools fetch one item
-// by id and render its BlockNote description as Markdown. No mutation.
+// `type` (1=tasks, 2=notes, 3=sticky notes; omitted = tasks + sticky notes) and
+// parametrized filters; view tools fetch one item by id and render its
+// BlockNote description as Markdown. No mutation.
 
 const datePlain = z
   .string()
@@ -907,34 +981,23 @@ const sortBySchema = z
     "Sort as 'field:asc' or 'field:desc'. Allowed fields: dueDate, createdAt, updatedAt, priority, position, name. Default updatedAt:desc."
   );
 
-const STATUS_LABEL = { 1: 'open', 2: 'complete' };
-
-/** Human label for a status code. */
-function statusLabel(status) {
-  return STATUS_LABEL[status] || (status == null ? 'unknown' : String(status));
-}
-
-/** Render a task/note's tags as a comma list of names (fallback to ids). */
-function formatTags(tags) {
-  if (!Array.isArray(tags) || tags.length === 0) return null;
-  return tags
-    .map((t) => (t && typeof t === 'object' ? t.name || t._id : t))
-    .filter(Boolean)
-    .join(', ');
-}
-
-/** Build the API filter params from tool params, resolving projectName. */
+/**
+ * Build the API filter params from tool params, resolving projectName and the
+ * kanban board/column names. `type` may be undefined (backend: tasks + sticky).
+ */
 async function buildListParams(type, params) {
-  // assigneeName is a client-side member filter (see applyAssigneeName); never
-  // forward it to the backend, which doesn't know that key.
-  const { projectName, assigneeName, ...rest } = params;
+  // assigneeName / boardName / kanbanColumnName are resolved client-side and
+  // must never reach the backend, which rejects unknown query keys.
+  const { projectName, assigneeName, boardName, kanbanColumnName, ...rest } = params;
   // Sanitize scalar filters (drops blank/placeholder values, incl. a blank
   // assigneeId => "all members").
-  const out = { type, ...sanitizeFilters(rest) };
+  const out = { ...sanitizeFilters(rest) };
+  if (type != null) out.type = type;
   if (PROJECT_LOCK) {
-    // Drop the id/priority narrowers this class of agent fabricates with
-    // non-blank garbage (parentId=projectId, assigneeId from a chat id, guessed
-    // priority) that would silently zero the "list the whole team" result.
+    // Drop the id narrowers this class of agent fabricates with non-blank
+    // garbage (parentId=projectId, assigneeId from a chat id, guessed priority,
+    // a boardId copied from somewhere) that would silently zero the "list the
+    // whole team" result. Board/column narrowing under lock is by NAME below.
     stripHallucinatedListFilters(out);
     // Hard override: force the project regardless of caller input. Do NOT
     // resolve projectName here — the override wins unconditionally, so an
@@ -944,67 +1007,17 @@ async function buildListParams(type, params) {
     // Unlocked (default) path: unchanged behavior.
     out.projectId = await resolveProjectId(projectName);
   }
-  return out;
-}
-
-/** One concise summary line per item for list output. */
-function summarizeItem(item, index) {
-  const parts = [];
-  parts.push(`status: ${statusLabel(item.status)}`);
-  if (item.priority != null) parts.push(`priority: ${item.priority}`);
-  if (item.dueDate) parts.push(`due: ${item.dueDate}${item.time ? ` ${item.time}` : ''}`);
-  else if (item.datePlain) parts.push(`due: ${item.datePlain}${item.time ? ` ${item.time}` : ''}`);
-  const tagStr = formatTags(item.tags);
-  if (tagStr) parts.push(`tags: ${tagStr}`);
-  if (item.projectId) parts.push(`project: ${item.projectId}`);
-  const owner = ownerName(item.userId);
-  if (owner) parts.push(`owner: ${owner}`);
-  return (
-    `${index}. ${item.name || '(untitled)'} [id: ${item._id ?? item.id}]\n` +
-    `   ${parts.join(' | ')}`
-  );
-}
-
-/** Render a list response as a concise, readable summary (not raw JSON). */
-function renderList(result, kindLabelPlural) {
-  const tasks = Array.isArray(result?.tasks) ? result.tasks : [];
-  const total = result?.total ?? tasks.length;
-  const page = result?.page ?? 1;
-  const limit = result?.limit ?? tasks.length;
-
-  if (tasks.length === 0) {
-    return `No ${kindLabelPlural} found (total: ${total}, page ${page}).`;
+  if (!isBlankValue(boardName) || !isBlankValue(kanbanColumnName)) {
+    const boards = await api.boards();
+    Object.assign(
+      out,
+      resolveBoardFilters(
+        { boardName, kanbanColumnName, boardId: out.boardId, kanbanColumnId: out.kanbanColumnId },
+        boards
+      )
+    );
   }
-
-  const lines = tasks.map((t, i) => summarizeItem(t, i + 1));
-  const footer = `\nShowing ${tasks.length} of ${total} ${kindLabelPlural} (page ${page}, limit ${limit}).`;
-  return `${lines.join('\n')}\n${footer}`;
-}
-
-/** Render one item's full detail with the description converted to Markdown. */
-function renderItem(item, kindLabel) {
-  const lines = [];
-  lines.push(`${item.name || '(untitled)'}`);
-  lines.push(`id: ${item._id ?? item.id}`);
-  lines.push(`type: ${item.type === 2 ? 'note' : 'task'} (${kindLabel})`);
-  lines.push(`status: ${statusLabel(item.status)}`);
-  if (item.priority != null) lines.push(`priority: ${item.priority}`);
-  if (item.dueDate) lines.push(`due: ${item.dueDate}${item.time ? ` ${item.time}` : ''}`);
-  else if (item.datePlain) lines.push(`due: ${item.datePlain}${item.time ? ` ${item.time}` : ''}`);
-  const tagStr = formatTags(item.tags);
-  if (tagStr) lines.push(`tags: ${tagStr}`);
-  if (item.projectId) lines.push(`project: ${item.projectId}`);
-  const owner = ownerName(item.userId);
-  if (owner) lines.push(`owner: ${owner}`);
-  if (item.parentId) lines.push(`parent: ${item.parentId}`);
-  if (item.createdAt) lines.push(`created: ${item.createdAt}`);
-  if (item.updatedAt) lines.push(`updated: ${item.updatedAt}`);
-
-  const md = descriptionToMarkdown(item.description);
-  lines.push('');
-  lines.push('--- description ---');
-  lines.push(md && md.trim() ? md : '(empty)');
-  return lines.join('\n');
+  return out;
 }
 
 /** Extract a single item from a view response (shape-tolerant). */
@@ -1053,19 +1066,41 @@ const listAssigneeName = z
       'Omit to list the WHOLE team (all members). Only set this when the user ' +
       'explicitly names a person; never guess.'
   );
+const listBoardName = z
+  .string()
+  .optional()
+  .describe(
+    'Filter by kanban board NAME (case-insensitive, resolved against your own and workspace boards). ' +
+      'Only set this when the user explicitly names a board; never guess.'
+  );
+const listKanbanColumnName = z
+  .string()
+  .optional()
+  .describe(
+    'Filter by kanban column NAME (e.g. "To Do", "Done"). Resolved inside boardName when given; ' +
+      'without a board the name must be unique across your boards. Only set this when the user ' +
+      'explicitly names a column; never guess.'
+  );
+const listBoardId = objectId.optional().describe('Filter by kanban board id');
+const listKanbanColumnId = objectId.optional().describe('Filter by kanban column id');
 
 // Build the list-filter schema. Under PROJECT_LOCK the project is forced and the
 // caller is a bespoke, project-scoped agent whose model fabricates id/priority
-// narrowers (parentId/assigneeId/priority) that silently zero the result — so
-// those fields are NOT offered; member narrowing is by NAME (assigneeName)
-// instead. Unlocked (default, e.g. clawis) keeps the full, unchanged surface.
-function listSchema(kind /* 'task' | 'note' */) {
+// narrowers (parentId/assigneeId/priority/boardId/kanbanColumnId) that silently
+// zero the result — so those fields are NOT offered; member and board/column
+// narrowing is by NAME instead. Unlocked (default, e.g. clawis) keeps the full
+// surface. `kind`: 'task' | 'note' | 'sticky' | 'all' — status/due-date filters
+// are offered for every task-page kind (sticky notes carry the same fields).
+function listSchema(kind) {
+  const taskLike = kind !== 'note';
   const base = { showCompleted: listShowCompleted };
-  if (kind === 'task') base.status = listStatus;
+  if (taskLike) base.status = listStatus;
   const tail = {
     tags: listTags,
     search: listSearch,
-    ...(kind === 'task'
+    boardName: listBoardName,
+    kanbanColumnName: listKanbanColumnName,
+    ...(taskLike
       ? {
           dueDateFrom: datePlain.optional().describe('Inclusive lower bound on due date (YYYY-MM-DD)'),
           dueDateTo: datePlain.optional().describe('Inclusive upper bound on due date (YYYY-MM-DD)'),
@@ -1073,7 +1108,7 @@ function listSchema(kind /* 'task' | 'note' */) {
       : {}),
     sortBy: listSortBy,
     limit: listLimit,
-    page: listPage,
+    ...(kind === 'all' ? {} : { page: listPage }),
   };
   if (PROJECT_LOCK) {
     return { ...base, assigneeName: listAssigneeName, ...tail };
@@ -1084,10 +1119,15 @@ function listSchema(kind /* 'task' | 'note' */) {
     projectName: listProjectName,
     projectId: listProjectId,
     assigneeId: listAssigneeId,
-    ...(kind === 'task' ? { parentId: listParentId } : {}),
+    ...(taskLike ? { parentId: listParentId } : {}),
+    boardId: listBoardId,
+    kanbanColumnId: listKanbanColumnId,
     ...tail,
   };
 }
+
+const BOARD_SCOPE_NOTE =
+  ' Board/column filters match items on your own and workspace boards; with a project scope, teammates’ items on their personal boards are not matched.';
 
 /**
  * Client-side member narrowing by NAME (used under PROJECT_LOCK, where the
@@ -1110,18 +1150,24 @@ function applyAssigneeName(result, assigneeName) {
   return { result: { ...result, tasks: filtered, total: filtered.length }, note: null };
 }
 
+/** Shared list handler: one backend call for a single type. */
+async function handleList(type, params, kindLabelPlural) {
+  const apiParams = await buildListParams(type, params);
+  const result = await api.listTasks(apiParams);
+  const { result: filtered, note } = applyAssigneeName(result, params.assigneeName);
+  const out = renderList(filtered, kindLabelPlural);
+  return toolOk(note ? `${out}\n\nNote: ${note}` : out);
+}
+
 // ---- planko_list_tasks ----
 server.tool(
   'planko_list_tasks',
-  'List Planko tasks (type=1) via your API key, no folder setup required. All filters are optional; omit any the user did not explicitly ask for. Recurring tasks appear as separate dated occurrences. Returns a concise summary, not raw JSON.',
+  'List Planko tasks (type=1) via your API key, no folder setup required. All filters are optional; omit any the user did not explicitly ask for. Recurring tasks appear as separate dated occurrences. Returns a concise summary, not raw JSON.' +
+    BOARD_SCOPE_NOTE,
   listSchema('task'),
   async (params) => {
     try {
-      const apiParams = await buildListParams(1, params);
-      const result = await api.listTasks(apiParams);
-      const { result: filtered, note } = applyAssigneeName(result, params.assigneeName);
-      const out = renderList(filtered, 'tasks');
-      return toolOk(note ? `${out}\n\nNote: ${note}` : out);
+      return await handleList(TYPE_TASK, params, 'tasks');
     } catch (err) {
       return toolError(`List tasks failed: ${err.message}`);
     }
@@ -1131,34 +1177,74 @@ server.tool(
 // ---- planko_list_notes ----
 server.tool(
   'planko_list_notes',
-  'List Planko notes (type=2) via your API key, no folder setup required. All filters are optional; omit any the user did not explicitly ask for. Deleted and recurring-copy notes are excluded. Returns a concise summary, not raw JSON.',
+  'List Planko notes (type=2) via your API key, no folder setup required. All filters are optional; omit any the user did not explicitly ask for. Deleted and recurring-copy notes are excluded. Returns a concise summary, not raw JSON.' +
+    BOARD_SCOPE_NOTE,
   listSchema('note'),
   async (params) => {
     try {
-      const apiParams = await buildListParams(2, params);
-      const result = await api.listTasks(apiParams);
-      const { result: filtered, note } = applyAssigneeName(result, params.assigneeName);
-      const out = renderList(filtered, 'notes');
-      return toolOk(note ? `${out}\n\nNote: ${note}` : out);
+      return await handleList(TYPE_NOTE, params, 'notes');
     } catch (err) {
       return toolError(`List notes failed: ${err.message}`);
     }
   }
 );
 
+// ---- planko_list_sticky_notes ----
+server.tool(
+  'planko_list_sticky_notes',
+  'List Planko sticky notes (type=3) via your API key, no folder setup required. Sticky notes are task-page items, so the same filters as planko_list_tasks apply. All filters are optional; omit any the user did not explicitly ask for. Returns a concise summary, not raw JSON.' +
+    BOARD_SCOPE_NOTE,
+  listSchema('sticky'),
+  async (params) => {
+    try {
+      return await handleList(TYPE_STICKY, params, 'sticky notes');
+    } catch (err) {
+      return toolError(`List sticky notes failed: ${err.message}`);
+    }
+  }
+);
+
+// ---- planko_list_all ----
+server.tool(
+  'planko_list_all',
+  'List Planko tasks, sticky notes AND notes together in one result, ordered by last update. Runs two backend queries (tasks + sticky notes; notes) with the same filters, so there is no page parameter: you get the `limit` most recently updated items of each kind. All filters are optional; omit any the user did not explicitly ask for. Returns a concise summary, not raw JSON.' +
+    BOARD_SCOPE_NOTE,
+  listSchema('all'),
+  async (params) => {
+    try {
+      const limit = params.limit || 50;
+      const taskParams = await buildListParams(undefined, { ...params, limit, page: 1 });
+      const noteParams = { ...taskParams, type: TYPE_NOTE };
+      const [taskRes, noteRes] = await Promise.all([api.listTasks(taskParams), api.listTasks(noteParams)]);
+      const t = applyAssigneeName(taskRes, params.assigneeName);
+      const n = applyAssigneeName(noteRes, params.assigneeName);
+      const out = renderAll(mergeAllLists(t.result, n.result, limit));
+      const note = t.note || n.note;
+      return toolOk(note ? `${out}\n\nNote: ${note}` : out);
+    } catch (err) {
+      return toolError(`List all failed: ${err.message}`);
+    }
+  }
+);
+
+/** Shared view handler: the type shown comes from the item itself. */
+async function handleView(taskId) {
+  const res = await api.getTask(taskId);
+  const item = unwrapItem(res);
+  assertProjectAllowed(PROJECT_LOCK, item);
+  return toolOk(renderItem(item));
+}
+
 // ---- planko_view_task ----
 server.tool(
   'planko_view_task',
-  'View one Planko task by id, with its description rendered as Markdown. The type is informational — this endpoint returns the item regardless of task/note type.',
+  'View one Planko task by id, with its description rendered as Markdown. The type is informational — this endpoint returns the item regardless of task/note/sticky-note type.',
   {
     taskId: objectId.describe('Id of the task to view (required)'),
   },
   async ({ taskId }) => {
     try {
-      const res = await api.getTask(taskId);
-      const item = unwrapItem(res);
-      assertProjectAllowed(PROJECT_LOCK, item);
-      return toolOk(renderItem(item, 'task'));
+      return await handleView(taskId);
     } catch (err) {
       return toolError(`View task failed: ${err.message}`);
     }
@@ -1168,18 +1254,31 @@ server.tool(
 // ---- planko_view_note ----
 server.tool(
   'planko_view_note',
-  'View one Planko note by id, with its description rendered as Markdown. The type is informational — this endpoint returns the item regardless of task/note type.',
+  'View one Planko note by id, with its description rendered as Markdown. The type is informational — this endpoint returns the item regardless of task/note/sticky-note type.',
   {
     taskId: objectId.describe('Id of the note to view (required)'),
   },
   async ({ taskId }) => {
     try {
-      const res = await api.getTask(taskId);
-      const item = unwrapItem(res);
-      assertProjectAllowed(PROJECT_LOCK, item);
-      return toolOk(renderItem(item, 'note'));
+      return await handleView(taskId);
     } catch (err) {
       return toolError(`View note failed: ${err.message}`);
+    }
+  }
+);
+
+// ---- planko_view_sticky_note ----
+server.tool(
+  'planko_view_sticky_note',
+  'View one Planko sticky note by id, with its description rendered as Markdown. The type is informational — this endpoint returns the item regardless of task/note/sticky-note type.',
+  {
+    taskId: objectId.describe('Id of the sticky note to view (required)'),
+  },
+  async ({ taskId }) => {
+    try {
+      return await handleView(taskId);
+    } catch (err) {
+      return toolError(`View sticky note failed: ${err.message}`);
     }
   }
 );

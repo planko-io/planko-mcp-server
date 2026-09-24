@@ -21,12 +21,16 @@ describe('stripHallucinatedListFilters (the "0 tasks always" bug)', () => {
       priority: 1, // guessed
       parentId: LOCK, // copied the project id -> zeroed every query
       assigneeId: '8222653984433766701a0000', // derived from a chat user id
+      boardId: LOCK, // copied the project id
+      kanbanColumnId: '8222653984433766701a0000',
       dueDateFrom: '2026-07-27',
     };
     stripHallucinatedListFilters(out);
     expect(out.parentId).toBeUndefined();
     expect(out.assigneeId).toBeUndefined();
     expect(out.priority).toBeUndefined();
+    expect(out.boardId).toBeUndefined();
+    expect(out.kanbanColumnId).toBeUndefined();
     // real filters survive
     expect(out).toMatchObject({ type: 1, status: 1, projectId: LOCK, dueDateFrom: '2026-07-27' });
   });

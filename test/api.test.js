@@ -192,6 +192,15 @@ describe('api.listTasks url/query shaping', () => {
   });
 });
 
+describe('api.boards', () => {
+  it('GETs /boards with the api key', async () => {
+    await makeClient().boards();
+    expect(lastCall().url).toBe(`${BASE}/mcp-project-sync/boards`);
+    expect(lastCall().options.method).toBe('GET');
+    expect(lastCall().options.headers['x-api-key']).toBe('test-key');
+  });
+});
+
 describe('api.getTask url shaping', () => {
   it('GETs /tasks/:id', async () => {
     await makeClient().getTask('abc123');
