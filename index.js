@@ -443,16 +443,16 @@ server.tool(
       const syncState = createSyncState(match._id, match.name, type);
       writeSyncState(folderPath, syncState);
 
-      const typeLabel = type === 2 ? 'Notes' : 'Tasks';
+      const syncLabel = type === 2 ? 'Notes' : 'Tasks';
 
       return toolOk(
         `Setup complete for project "${match.name}".\n` +
           `  Project ID: ${match._id}\n` +
           `  Folder: ${folderPath}\n` +
           `  Email: ${email}\n` +
-          `  Syncs: ${typeLabel} (type=${type})\n` +
+          `  Syncs: ${syncLabel} (type=${type})\n` +
           `  Workspace: ${match.isWorkspace ? 'Yes' : 'No (personal)'}\n\n` +
-          `Run planko_sync to pull ${typeLabel.toLowerCase()} into this folder.`
+          `Run planko_sync to pull ${syncLabel.toLowerCase()} into this folder.`
       );
     } catch (err) {
       return toolError(`Setup failed: ${err.message}`);
@@ -1207,7 +1207,7 @@ server.tool(
 // ---- planko_list_all ----
 server.tool(
   'planko_list_all',
-  'List Planko tasks, sticky notes AND notes together in one result, ordered by last update. Runs two backend queries (tasks + sticky notes; notes) with the same filters, so there is no page parameter: you get the `limit` most recently updated items of each kind. All filters are optional; omit any the user did not explicitly ask for. Returns a concise summary, not raw JSON.' +
+  'List Planko tasks, sticky notes AND notes together in one result. Runs two backend queries (tasks + sticky notes; notes) with the same filters and merges them by sortBy (default updatedAt:desc), cut to `limit`; there is no page parameter. All filters are optional; omit any the user did not explicitly ask for. Returns a concise summary, not raw JSON.' +
     BOARD_SCOPE_NOTE,
   listSchema('all'),
   async (params) => {
@@ -1218,9 +1218,9 @@ server.tool(
       const [taskRes, noteRes] = await Promise.all([api.listTasks(taskParams), api.listTasks(noteParams)]);
       const t = applyAssigneeName(taskRes, params.assigneeName);
       const n = applyAssigneeName(noteRes, params.assigneeName);
-      const out = renderAll(mergeAllLists(t.result, n.result, limit));
-      const note = t.note || n.note;
-      return toolOk(note ? `${out}\n\nNote: ${note}` : out);
+      const out = renderAll(mergeAllLists(t.result, n.result, limit, params.sortBy));
+      const notes = [t.note, n.note].filter(Boolean);
+      return toolOk(notes.length ? `${out}\n\nNote: ${notes.join(' ')}` : out);
     } catch (err) {
       return toolError(`List all failed: ${err.message}`);
     }

@@ -123,6 +123,11 @@ export function resolveBoardFilters(params, boards) {
     out.boardId = boardIdOf(board);
   } else if (!isBlankValue(params.boardId)) {
     board = all.find((b) => boardIdOf(b) === String(params.boardId)) || null;
+    if (!board) {
+      throw new Error(
+        `Board id "${params.boardId}" is not one of your boards.\n\nAvailable boards:\n${boardSummary(all) || '  (none)'}`
+      );
+    }
   }
 
   if (wantColumnName) {
@@ -222,38 +227,70 @@ export function renderItem(item) {
   return lines.join('\n');
 }
 
-function updatedAtMs(item) {
-  const t = item?.updatedAt ? new Date(item.updatedAt).getTime() : NaN;
-  return Number.isNaN(t) ? 0 : t;
+const SORTABLE_FIELDS = new Set(['dueDate', 'createdAt', 'updatedAt', 'priority', 'position', 'name']);
+const DATE_FIELDS = new Set(['dueDate', 'createdAt', 'updatedAt']);
+
+/** Parse 'field:dir' with the backend's whitelist; default updatedAt:desc. */
+export function parseSort(sortBy) {
+  if (typeof sortBy === 'string' && sortBy.includes(':')) {
+    const [field, dir] = sortBy.split(':');
+    if (SORTABLE_FIELDS.has(field)) return { field, dir: dir === 'asc' ? 'asc' : 'desc' };
+  }
+  return { field: 'updatedAt', dir: 'desc' };
+}
+
+function sortValue(item, field) {
+  const v = item?.[field];
+  if (v == null) return null;
+  if (DATE_FIELDS.has(field)) {
+    const t = new Date(v).getTime();
+    return Number.isNaN(t) ? null : t;
+  }
+  return v;
+}
+
+function compareBy({ field, dir }) {
+  const sign = dir === 'asc' ? 1 : -1;
+  return (a, b) => {
+    const va = sortValue(a, field);
+    const vb = sortValue(b, field);
+    if (va === vb) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    if (typeof va === 'string' || typeof vb === 'string') return sign * String(va).localeCompare(String(vb));
+    return sign * (va < vb ? -1 : 1);
+  };
 }
 
 /**
  * Merge the two backend windows behind planko_list_all (tasks+sticky notes,
- * and notes) into one list ordered by updatedAt desc. Each input is a page-1
- * window of `limit` items; the union has no real pagination, so the result
- * carries both totals and a `perKindLimit` for the footer.
+ * and notes) into one list. Each input is a page-1 window of `limit` items
+ * sorted by `sortBy` on the server; the union is re-sorted by the same key and
+ * cut to `limit`. Missing values sort last regardless of direction.
  */
-export function mergeAllLists(taskRes, noteRes, limit) {
+export function mergeAllLists(taskRes, noteRes, limit, sortBy) {
   const tasks = Array.isArray(taskRes?.tasks) ? taskRes.tasks : [];
   const notes = Array.isArray(noteRes?.tasks) ? noteRes.tasks : [];
-  const merged = [...tasks, ...notes].sort((a, b) => updatedAtMs(b) - updatedAtMs(a));
+  const sort = parseSort(sortBy);
+  const merged = [...tasks, ...notes].sort(compareBy(sort)).slice(0, limit);
   return {
     tasks: merged,
     totals: { tasksAndStickyNotes: taskRes?.total ?? tasks.length, notes: noteRes?.total ?? notes.length },
-    perKindLimit: limit,
+    limit,
+    sort,
   };
 }
 
 /** Render the merged planko_list_all result. */
 export function renderAll(merged) {
-  const { tasks, totals, perKindLimit } = merged;
+  const { tasks, totals, limit, sort } = merged;
   const total = totals.tasksAndStickyNotes + totals.notes;
   if (tasks.length === 0) {
     return `No items found (tasks + sticky notes: ${totals.tasksAndStickyNotes}, notes: ${totals.notes}).`;
   }
   const lines = tasks.map((t, i) => summarizeItem(t, i + 1));
   const footer =
-    `\nShowing ${tasks.length} of ${total} items — the ${perKindLimit} most recently updated per kind ` +
+    `\nShowing ${tasks.length} of ${total} items, ordered by ${sort.field}:${sort.dir}, limit ${limit} ` +
     `(tasks + sticky notes: ${totals.tasksAndStickyNotes}, notes: ${totals.notes}). ` +
     `Use planko_list_tasks / planko_list_notes / planko_list_sticky_notes to page through one kind.`;
   return `${lines.join('\n')}\n${footer}`;

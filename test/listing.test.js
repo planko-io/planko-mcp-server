@@ -10,6 +10,7 @@ import {
   renderList,
   mergeAllLists,
   renderAll,
+  parseSort,
 } from '../src/listing.js';
 
 const B1 = '6742635e764bda007ab98701';
@@ -127,6 +128,12 @@ describe('resolveBoardFilters', () => {
     );
   });
 
+  it('errors when an explicit boardId is not one of the caller boards (instead of a silent zero result)', () => {
+    expect(() => resolveBoardFilters({ boardId: '6742635e764bda007ab98799', kanbanColumnName: 'Review' }, boards)).toThrow(
+      /Board id "6742635e764bda007ab98799" is not one of your boards/
+    );
+  });
+
   it('an explicit kanbanColumnId wins over kanbanColumnName', () => {
     expect(resolveBoardFilters({ kanbanColumnId: C_DONE_1, kanbanColumnName: 'To Do' }, boards)).toEqual({
       kanbanColumnId: C_DONE_1,
@@ -201,11 +208,31 @@ describe('mergeAllLists / renderAll', () => {
     total: 3,
   };
 
-  it('orders the union by updatedAt desc and keeps both totals', () => {
+  it('orders the union by updatedAt desc by default and keeps both totals', () => {
     const merged = mergeAllLists(taskRes, noteRes, 50);
     expect(merged.tasks.map((t) => t._id)).toEqual(['s', 'n', 'a']);
     expect(merged.totals).toEqual({ tasksAndStickyNotes: 12, notes: 3 });
-    expect(merged.perKindLimit).toBe(50);
+    expect(merged.limit).toBe(50);
+    expect(merged.sort).toEqual({ field: 'updatedAt', dir: 'desc' });
+  });
+
+  it('honours sortBy on the merged union (asc, string field, missing values last)', () => {
+    const t = { tasks: [{ _id: 'b', name: 'Beta' }, { _id: 'z' }], total: 2 };
+    const n = { tasks: [{ _id: 'a', name: 'alpha' }], total: 1 };
+    expect(mergeAllLists(t, n, 50, 'name:asc').tasks.map((x) => x._id)).toEqual(['a', 'b', 'z']);
+    expect(mergeAllLists(t, n, 50, 'name:desc').tasks.map((x) => x._id)).toEqual(['b', 'a', 'z']);
+    expect(mergeAllLists(taskRes, noteRes, 50, 'updatedAt:asc').tasks.map((x) => x._id)).toEqual(['a', 'n', 's']);
+  });
+
+  it('falls back to updatedAt:desc for an unknown sort field', () => {
+    expect(parseSort('nope:asc')).toEqual({ field: 'updatedAt', dir: 'desc' });
+    expect(parseSort(undefined)).toEqual({ field: 'updatedAt', dir: 'desc' });
+    expect(parseSort('priority:asc')).toEqual({ field: 'priority', dir: 'asc' });
+  });
+
+  it('cuts the union to limit', () => {
+    const merged = mergeAllLists(taskRes, noteRes, 2);
+    expect(merged.tasks.map((t) => t._id)).toEqual(['s', 'n']);
   });
 
   it('tolerates a missing/invalid updatedAt', () => {
@@ -214,11 +241,11 @@ describe('mergeAllLists / renderAll', () => {
     expect(merged.totals).toEqual({ tasksAndStickyNotes: 1, notes: 1 });
   });
 
-  it('renders a footer explaining the per-kind window', () => {
+  it('renders a footer with the sort key, limit and both totals', () => {
     const out = renderAll(mergeAllLists(taskRes, noteRes, 50));
     expect(out).toContain('1. S [id: s]');
     expect(out).toContain('type: sticky note');
-    expect(out).toContain('Showing 3 of 15 items — the 50 most recently updated per kind');
+    expect(out).toContain('Showing 3 of 15 items, ordered by updatedAt:desc, limit 50');
     expect(out).toContain('tasks + sticky notes: 12, notes: 3');
   });
 
