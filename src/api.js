@@ -51,6 +51,14 @@ export function createApiClient({ apiKey, apiBase }) {
     },
 
     /**
+     * GET /mcp-project-sync/boards — the caller's kanban boards (personal +
+     * workspace), each with its columns: { personal: [...], workspace: [...] }.
+     */
+    async boards() {
+      return request('GET', '/mcp-project-sync/boards');
+    },
+
+    /**
      * GET /mcp-project-sync/status?projectId=...&mcpLastSyncDate=...&type=...
      * `type` (1=tasks, 2=notes) is appended whenever set, independent of mcpLastSyncDate.
      */
@@ -119,6 +127,15 @@ export function createApiClient({ apiKey, apiBase }) {
      */
     async deleteTask(taskId) {
       return request('DELETE', `/mcp-project-sync/tasks/${taskId}`);
+    },
+
+    /**
+     * POST /mcp-project-sync/recommendations — suggest something to the API
+     * key's owner (PL274). Body { type, payload }; returns the Recommendation
+     * doc (status 'pending'). The task is only created when the owner accepts.
+     */
+    async createRecommendation(body) {
+      return request('POST', '/mcp-project-sync/recommendations', body);
     },
 
     // --- Read (user-scoped, no folder sync required) ---

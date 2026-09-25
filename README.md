@@ -4,7 +4,7 @@ MCP server for syncing [Planko](https://planko.io) tasks with local Markdown fil
 
 ## Features
 
-- **14 tools**: 3 folder-sync tools + 7 standalone task/note CRUD tools + 4 standalone read (list/view) tools
+- **21 tools**: 3 folder-sync tools + 10 standalone task/note/sticky-note CRUD tools + 7 standalone read (list/view) tools + `planko_recommend_task` (suggest a task for the owner to accept or reject), incl. `planko_list_all` and kanban board/column filters
 - **Type-aware sync**: each folder syncs either **tasks** (type=1) or **notes** (type=2), chosen at setup
 - **Multi-folder**: sync multiple projects to different local folders
 - **Bidirectional sync**: pull remote changes, push local changes
@@ -87,7 +87,9 @@ Tasks are pulled as `.md` files into your folder. Local changes are pushed back 
 
 ## Tools
 
-The server exposes 14 tools in three groups: **folder-sync** tools (bind a project to a local folder), **standalone CRUD** tools (create/edit/complete/delete directly via your API key, no folder needed), and **standalone read** tools (list/view directly via your API key, no folder needed).
+The server exposes 21 tools in four groups: **folder-sync** tools (bind a project to a local folder), **standalone CRUD** tools (create/edit/complete/delete directly via your API key, no folder needed), **standalone read** tools (list/view directly via your API key, no folder needed), and a **recommendation** tool (suggest a task that the account owner accepts or rejects).
+
+Planko has three kinds of item, all stored as tasks with a `type`: **tasks** (`type=1`), **notes** (`type=2`) and **sticky notes** (`type=3`, a task-page item with every task property). Every kind has its own create/edit/delete/view/list tool; `planko_list_all` lists the three together.
 
 ### Folder-sync tools
 
@@ -99,17 +101,20 @@ The server exposes 14 tools in three groups: **folder-sync** tools (bind a proje
 
 ### Standalone CRUD tools
 
-These work with the **same API key** and require **no folder setup**. Notes are Planko tasks with `type=2`; tasks are `type=1`. They live in the same collection, so edit/delete work on both. `create_*` tools accept all task/note properties as optional params (only `name` is required); the Markdown `description` is converted to Planko's rich-text (BlockNote) format automatically.
+These work with the **same API key** and require **no folder setup**. Tasks, notes and sticky notes live in the same collection, so edit/delete work on any id regardless of the tool's name. `create_*` tools accept all task/note properties as optional params (only `name` is required); the Markdown `description` is converted to Planko's rich-text (BlockNote) format automatically.
 
 | Tool | Description | Key parameters |
 |---|---|---|
 | `planko_create_task` | Create a task (type=1) | `name` (required), `projectName` (optional), plus any properties below |
 | `planko_create_note` | Create a note (type=2) | `name` (required), `projectName` (optional), plus any properties below |
+| `planko_create_sticky_note` | Create a sticky note (type=3) | `name` (required), `projectName` (optional), plus any properties below |
 | `planko_edit_task` | Edit an existing task by id | `taskId` (required), plus any properties to change |
 | `planko_edit_note` | Edit an existing note by id (shares the task edit endpoint) | `taskId` (required), plus any properties to change |
-| `planko_complete_task` | Mark a task complete (status=2) | `taskId` (required) |
+| `planko_edit_sticky_note` | Edit an existing sticky note by id (shares the task edit endpoint) | `taskId` (required), plus any properties to change |
+| `planko_complete_task` | Mark a task (or sticky note) complete (status=2) | `taskId` (required) |
 | `planko_delete_task` | Delete a task by id | `taskId` (required) |
 | `planko_delete_note` | Delete a note by id (shares the task delete endpoint) | `taskId` (required) |
+| `planko_delete_sticky_note` | Delete a sticky note by id (shares the task delete endpoint) | `taskId` (required) |
 
 **Optional properties** accepted by the create/edit tools (all optional; omit to leave unchanged):
 
@@ -123,12 +128,12 @@ These work with the **same API key** and require **no folder setup**. Notes are 
 | `alertLeadTime` | `null`\|`ontime`\|`15min`\|`30min`\|`1hour`\|`1day` | Reminder lead time |
 | `priority` | `1`\|`2`\|`3` | |
 | `repeat` | `null`\|`daily`\|`workdays`\|`weekly`\|`biweekly`\|`monthly`\|`custom_weekly`\|`yearly` | Recurrence rule |
-| `repeatDate` | ISO 8601 string | Recurrence anchor/end |
+| `repeatDate` | integer | Recurrence day, not a date: weekday `1`–`7` for `weekly`, day of month `1`–`31` for `monthly` |
 | `selectedWeekdays` | array of `0`–`6` | For `custom_weekly` (0=Sunday) |
 | `parentId` | ObjectId | Parent task, for subtasks |
 | `tags` | array of ObjectId | Tag ids |
 | `kanbanColumnId` / `boardId` | ObjectId | Kanban placement |
-| `type` | `1`\|`2` | (edit tools only) switch task↔note |
+| `type` | `1`\|`2`\|`3` | (edit tools only) switch between task, note and sticky note |
 | `projectId` | ObjectId | (edit tools only) move to another project |
 
 Notes:
@@ -147,6 +152,27 @@ planko_complete_task(taskId: "665f...c0")
 planko_delete_note(taskId: "665f...aa")
 ```
 
+### Recommendation tool
+
+A recommendation is a **suggestion, not a write**. The backend stores it as `pending`, notifies the owner of the API key (notification centre + mobile push) with **Accept / Reject** buttons, and creates the task only when they accept. Use it when a human should approve before anything is written, or when the agent must not create tasks directly.
+
+| Tool | Description | Key parameters |
+|---|---|---|
+| `planko_recommend_task` | Suggest a new task to the account owner | `title` (required), `projectName` (optional), plus any of the task properties above (applied to the task on accept) |
+
+Notes:
+
+- The recipient is **always the owner of the API key**, never other project members, even when the suggestion targets a shared workspace project.
+- `description` is Markdown, converted to BlockNote like the create tools. `datePlain` is derived from the date part of `dueDate` when only `dueDate` is given, because the owner's notification card shows `datePlain` (plus `time` and `priority`).
+- A reference the owner cannot access (`projectId`, `parentId`, `tags`, `boardId`, `kanbanColumnId`) is rejected at send time with a `400`. A reference that becomes stale later is dropped when the owner accepts; the task is still created.
+- There is **no read-back**: the API has no endpoint to list recommendations or learn their outcome, and every call creates a new pending suggestion plus a new notification. Send each suggestion once; do not retry on a slow response.
+- Under `PLANKO_PROJECT_LOCK` the suggestion always targets the locked project (see below).
+
+```
+planko_recommend_task(title: "Renovar contrato Acme", datePlain: "2026-10-01", time: "14:00", priority: 1)
+planko_recommend_task(title: "Revisar proposta", projectName: "Comercial", description: "Pontos:\n- prazo\n- valor")
+```
+
 ### Standalone read tools
 
 These also work with the **same API key** and require **no folder setup**. `list_*` returns a concise, readable summary (one line per item plus a `total`/page footer) — never a raw JSON dump. `view_*` returns full detail with the `description` converted from BlockNote to **Markdown** for display.
@@ -154,15 +180,22 @@ These also work with the **same API key** and require **no folder setup**. `list
 | Tool | Description | Key parameters |
 |---|---|---|
 | `planko_list_tasks` | List your tasks (type=1) | all filters below |
-| `planko_list_notes` | List your notes (type=2) | filter subset: `showCompleted`, `projectName`/`projectId`, `tags`, `search`, `sortBy`, `limit`, `page` |
+| `planko_list_notes` | List your notes (type=2) | filter subset: `showCompleted`, `projectName`/`projectId`, `tags`, `search`, board/column, `sortBy`, `limit`, `page` |
+| `planko_list_sticky_notes` | List your sticky notes (type=3) | same filters as `planko_list_tasks` |
+| `planko_list_all` | Tasks + sticky notes + notes together, ordered by last update | same filters as `planko_list_tasks`, except `page` (see below) |
 | `planko_view_task` | View one task by id | `taskId` (required) |
 | `planko_view_note` | View one note by id (shares the view endpoint) | `taskId` (required) |
+| `planko_view_sticky_note` | View one sticky note by id (shares the view endpoint) | `taskId` (required) |
 
-**Scope.** Without `projectId`/`projectName`, a list is scoped to **your own** items. With a project (resolved from `projectName` via your accessible projects), it includes that project's items **including workspace-shared** ones from other members. Use `assigneeId` to narrow a project listing to one member; omit it for all members. `view_*` returns the item if you own it or can access its project, otherwise it errors (404 if missing, 403 if not visible). `view_task`/`view_note` do not filter by type — either id resolves; the `task`/`note` label is informational.
+**Scope.** Without `projectId`/`projectName`, a list is scoped to **your own** items. With a project (resolved from `projectName` via your accessible projects), it includes that project's items **including workspace-shared** ones from other members. Use `assigneeId` to narrow a project listing to one member; omit it for all members. `view_*` returns the item if you own it or can access its project, otherwise it errors (404 if missing, 403 if not visible). `view_*` tools do not filter by type — any id resolves; the `type:` line in the output reflects the item itself.
+
+**`planko_list_all`.** Runs two backend queries with the same filters (tasks + sticky notes in one, notes in the other), each returning its first `limit` items by `sortBy`, then merges them by the same `sortBy` (default `updatedAt:desc`) and cuts the union to `limit`. Because the union has no server-side pagination there is no `page` parameter; the footer reports both totals. To page through one kind, use its own list tool. Note that a `dueDateFrom`/`dueDateTo` range is applied to the notes query too, which (as on the server for any dated notes query) includes recurring-note occurrences that an undated `planko_list_notes` hides.
 
 **Owner in output.** When the backend populates an item's `userId` as an object `{ _id, name, email }`, list lines and `view_*` detail append `owner: <name>` so you can tell whose task it is in a multi-member project listing. If `userId` is a bare id/string, nothing extra is shown.
 
-**List filters** (`planko_list_tasks` accepts all; `planko_list_notes` accepts the applicable subset):
+**Board / column in output.** Items on a kanban board show `board: <name>` and `column: <name>` (falling back to the id when the reference is not populated).
+
+**List filters** (`planko_list_tasks`, `planko_list_sticky_notes` and `planko_list_all` accept all; `planko_list_notes` accepts the applicable subset):
 
 | Filter | Type | Notes |
 |---|---|---|
@@ -173,6 +206,9 @@ These also work with the **same API key** and require **no folder setup**. `list
 | `projectId` | ObjectId | Alternative to `projectName` |
 | `assigneeId` | ObjectId | Filter to a single project member by their user id. Omit for **all members**. Applies within a project listing (needs a project scope to be meaningful) |
 | `parentId` | ObjectId | (tasks only) list subtasks of this parent |
+| `boardName` | string | Kanban board name, case-insensitive, resolved against your own + workspace boards (`GET /mcp-project-sync/boards`). Errors listing the available boards on a miss |
+| `kanbanColumnName` | string | Kanban column name (e.g. `To Do`). Resolved inside `boardName` when given; without a board it must be unique across your boards — default column names repeat on every board, so an ambiguous name errors with the `board › column` candidates instead of guessing |
+| `boardId` / `kanbanColumnId` | ObjectId | Direct id alternatives to the names (not offered under project lock) |
 | `tags` | array of ObjectId | AND semantics — item must have all tags |
 | `search` | string | Case-insensitive match on the name |
 | `dueDateFrom` / `dueDateTo` | `YYYY-MM-DD` | (tasks only) inclusive due-date bounds |
@@ -180,13 +216,18 @@ These also work with the **same API key** and require **no folder setup**. `list
 | `limit` | int | Default 50, max 200 |
 | `page` | int | Default 1 |
 
-Notes-specific behavior: deleted notes and recurring-copy notes are excluded server-side. For tasks, recurring occurrences appear as separate dated items.
+Notes-specific behavior: deleted notes and recurring-copy notes are excluded server-side. For tasks and sticky notes, recurring occurrences appear as separate dated items.
+
+Board/column filters are ANDed onto the list scope. Boards belong to a user or a workspace, not to a project: with a project scope, a teammate's items placed on **their personal** board are not matched by a board filter (only your own and workspace boards are resolvable).
 
 #### Examples
 
 ```
 planko_list_tasks(status: 1, priority: 1, dueDateFrom: "2026-07-20", dueDateTo: "2026-07-26", sortBy: "dueDate:asc")
 planko_list_tasks(projectName: "Work", search: "invoice", limit: 20)
+planko_list_tasks(boardName: "Time Planko", kanbanColumnName: "In Progress")
+planko_list_sticky_notes(showCompleted: false)
+planko_list_all(search: "orçamento", limit: 20)
 planko_list_notes(search: "meeting", showCompleted: false)
 planko_view_task(taskId: "665f...c0")
 planko_view_note(taskId: "665f...aa")
@@ -226,16 +267,23 @@ shared automation should only ever touch a single project.
 
 When set, it changes behavior as follows:
 
-- **Create** (`create_task` / `create_note`): the new item is always created in the
+- **Create** (`create_task` / `create_note` / `create_sticky_note`) and **Recommend**
+  (`recommend_task`): the new item (or the suggested task) always targets the
   locked project; any `projectName` the caller passes is ignored (and not resolved).
-- **List** (`list_tasks` / `list_notes`): always scoped to the locked project
-  (ignoring `projectName`/`projectId`), which yields the all-members listing for
-  that project. The `priority`, `projectName`, `projectId`, `assigneeId` and
-  `parentId` filters are **not offered** under a lock (and dropped if forced) —
-  GPT-class callers reliably fabricate them with plausible-but-wrong non-blank
-  values that silently zero the result. Narrow to one member with **`assigneeName`**
-  (their name/email, matched client-side against the owner) instead; omit it for
-  all members.
+  A recommendation's response says so when that happens. Note that `priority`,
+  `parentId`, `boardId` and `kanbanColumnId` on create/recommend are NOT stripped
+  under a lock (unlike the list filters): a fabricated id is rejected by the backend
+  with a `400` rather than silently misplacing the item.
+- **List** (`list_tasks` / `list_notes` / `list_sticky_notes` / `list_all`): always
+  scoped to the locked project (ignoring `projectName`/`projectId`), which yields
+  the all-members listing for that project. The `priority`, `projectName`,
+  `projectId`, `assigneeId`, `parentId`, `boardId` and `kanbanColumnId` filters are
+  **not offered** under a lock (and dropped if forced) — GPT-class callers reliably
+  fabricate them with plausible-but-wrong non-blank values that silently zero the
+  result. Narrow to one member with **`assigneeName`** (their name/email, matched
+  client-side against the owner) and to a board/column with **`boardName`** /
+  **`kanbanColumnName`** (resolved against the key owner's boards) instead; omit
+  them for all members / all boards.
 - **Edit** (`edit_task` / `edit_note`): if the caller supplies a `projectId`, it is
   forced back to the locked project (an edit can never move a task out of it). If no
   project field is supplied, the project is left unchanged.
