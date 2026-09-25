@@ -4,7 +4,7 @@ MCP server for syncing [Planko](https://planko.io) tasks with local Markdown fil
 
 ## Features
 
-- **20 tools**: 3 folder-sync tools + 10 standalone task/note/sticky-note CRUD tools + 7 standalone read (list/view) tools, incl. `planko_list_all` and kanban board/column filters
+- **21 tools**: 3 folder-sync tools + 10 standalone task/note/sticky-note CRUD tools + 7 standalone read (list/view) tools + `planko_recommend_task` (suggest a task for the owner to accept or reject), incl. `planko_list_all` and kanban board/column filters
 - **Type-aware sync**: each folder syncs either **tasks** (type=1) or **notes** (type=2), chosen at setup
 - **Multi-folder**: sync multiple projects to different local folders
 - **Bidirectional sync**: pull remote changes, push local changes
@@ -87,7 +87,7 @@ Tasks are pulled as `.md` files into your folder. Local changes are pushed back 
 
 ## Tools
 
-The server exposes 20 tools in three groups: **folder-sync** tools (bind a project to a local folder), **standalone CRUD** tools (create/edit/complete/delete directly via your API key, no folder needed), and **standalone read** tools (list/view directly via your API key, no folder needed).
+The server exposes 21 tools in four groups: **folder-sync** tools (bind a project to a local folder), **standalone CRUD** tools (create/edit/complete/delete directly via your API key, no folder needed), **standalone read** tools (list/view directly via your API key, no folder needed), and a **recommendation** tool (suggest a task that the account owner accepts or rejects).
 
 Planko has three kinds of item, all stored as tasks with a `type`: **tasks** (`type=1`), **notes** (`type=2`) and **sticky notes** (`type=3`, a task-page item with every task property). Every kind has its own create/edit/delete/view/list tool; `planko_list_all` lists the three together.
 
@@ -150,6 +150,27 @@ planko_create_note(name: "Meeting notes", description: "# Sync\n- point A\n- poi
 planko_edit_task(taskId: "665f...c0", name: "Ship v2.1", alertLeadTime: "1hour")
 planko_complete_task(taskId: "665f...c0")
 planko_delete_note(taskId: "665f...aa")
+```
+
+### Recommendation tool
+
+A recommendation is a **suggestion, not a write**. The backend stores it as `pending`, notifies the owner of the API key (notification centre + mobile push) with **Accept / Reject** buttons, and creates the task only when they accept. Use it when a human should approve before anything is written, or when the agent must not create tasks directly.
+
+| Tool | Description | Key parameters |
+|---|---|---|
+| `planko_recommend_task` | Suggest a new task to the account owner | `title` (required), `projectName` (optional), plus any of the task properties above (applied to the task on accept) |
+
+Notes:
+
+- The recipient is **always the owner of the API key**, never other project members, even when the suggestion targets a shared workspace project.
+- `description` is Markdown, converted to BlockNote like the create tools. `datePlain` is derived from the date part of `dueDate` when only `dueDate` is given, because the owner's notification card shows `datePlain` (plus `time` and `priority`).
+- A reference the owner cannot access (`projectId`, `parentId`, `tags`, `boardId`, `kanbanColumnId`) is rejected at send time with a `400`. A reference that becomes stale later is dropped when the owner accepts; the task is still created.
+- There is **no read-back**: the API has no endpoint to list recommendations or learn their outcome, and every call creates a new pending suggestion plus a new notification. Send each suggestion once; do not retry on a slow response.
+- Under `PLANKO_PROJECT_LOCK` the suggestion always targets the locked project (see below).
+
+```
+planko_recommend_task(title: "Renovar contrato Acme", datePlain: "2026-10-01", time: "14:00", priority: 1)
+planko_recommend_task(title: "Revisar proposta", projectName: "Comercial", description: "Pontos:\n- prazo\n- valor")
 ```
 
 ### Standalone read tools
@@ -246,8 +267,13 @@ shared automation should only ever touch a single project.
 
 When set, it changes behavior as follows:
 
-- **Create** (`create_task` / `create_note`): the new item is always created in the
+- **Create** (`create_task` / `create_note` / `create_sticky_note`) and **Recommend**
+  (`recommend_task`): the new item (or the suggested task) always targets the
   locked project; any `projectName` the caller passes is ignored (and not resolved).
+  A recommendation's response says so when that happens. Note that `priority`,
+  `parentId`, `boardId` and `kanbanColumnId` on create/recommend are NOT stripped
+  under a lock (unlike the list filters): a fabricated id is rejected by the backend
+  with a `400` rather than silently misplacing the item.
 - **List** (`list_tasks` / `list_notes` / `list_sticky_notes` / `list_all`): always
   scoped to the locked project (ignoring `projectName`/`projectId`), which yields
   the all-members listing for that project. The `priority`, `projectName`,

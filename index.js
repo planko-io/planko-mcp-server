@@ -13,6 +13,7 @@
  *     for tasks (type=1), notes (type=2) and sticky notes (type=3)
  *   planko_complete_task — works on any item id
  *   planko_list_all — tasks + sticky notes + notes in one listing
+ *   planko_recommend_task — suggest a task for the account owner to accept/reject
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -34,6 +35,11 @@ import {
   renderAll,
 } from './src/listing.js';
 import { isBlankValue, applyDueDateFallback } from './src/sanitize.js';
+import {
+  buildRecommendationBody,
+  renderRecommendation,
+  describeLockError,
+} from './src/recommend.js';
 import {
   lockProjectId,
   sanitizeFilters,
@@ -779,7 +785,7 @@ async function handleEdit(params, kindLabel) {
 // ---- planko_create_task ----
 server.tool(
   'planko_create_task',
-  'Create a Planko task (type=1) directly via your API key. Works without any folder setup. Provide a name (required); all other properties are optional. Optionally target a project by name (otherwise your default project is used).',
+  'Create a Planko task (type=1) directly via your API key, immediately and without approval. Works without any folder setup. Provide a name (required); all other properties are optional. Optionally target a project by name (otherwise your default project is used). To propose a task for the account owner to accept or reject instead, use planko_recommend_task.',
   {
     name: z.string().describe('Task name (required)'),
     projectName: z
@@ -835,6 +841,55 @@ server.tool(
       return await handleCreate(TYPE_STICKY, params, 'sticky note');
     } catch (err) {
       return toolError(`Create sticky note failed: ${err.message}`);
+    }
+  }
+);
+
+// ---- planko_recommend_task ----
+// PL274: a SUGGESTION, not a write. The backend stores it as a pending
+// recommendation addressed to the API key's owner and notifies them; the task is
+// created only if they accept it in Planko. There is no read-back endpoint.
+server.tool(
+  'planko_recommend_task',
+  'Suggest a new task to the Planko account owner instead of creating it. The owner gets a notification (notification centre + push) with Accept/Reject buttons; the task is created only when they accept. Use this when a human should approve before anything is written, or when you must not create tasks directly; use planko_create_task to create immediately. The recipient is always the owner of the API key (never other project members). Provide a title (required); all other task properties are optional and are applied to the task on accept. The outcome cannot be read back afterwards and re-sending creates a duplicate suggestion, so send each suggestion once.',
+  {
+    title: z.string().trim().min(1).max(500).describe('Suggested task name (required, up to 500 characters)'),
+    projectName: z
+      .string()
+      .optional()
+      .describe('Project name the task would be created in (optional — omit for the owner\'s default project)'),
+    ...taskProps,
+  },
+  async (params) => {
+    try {
+      const { title, projectName, ...rest } = params;
+      const body = buildTaskBody(rest);
+      let projectNameIgnored = false;
+
+      if (PROJECT_LOCK) {
+        // Same hard override as handleCreate: the suggestion can only target
+        // the locked project; projectName is neither resolved nor honoured.
+        body.projectId = lockProjectId(PROJECT_LOCK, body.projectId);
+        projectNameIgnored = !isBlankValue(projectName);
+      } else if (!isBlankValue(projectName)) {
+        body.projectId = await resolveProjectId(projectName);
+      }
+
+      let res;
+      try {
+        res = await api.createRecommendation(buildRecommendationBody(title, body));
+      } catch (err) {
+        throw describeLockError(err, PROJECT_LOCK);
+      }
+      return toolOk(
+        renderRecommendation(res, {
+          projectId: body.projectId,
+          lock: PROJECT_LOCK,
+          projectNameIgnored,
+        })
+      );
+    } catch (err) {
+      return toolError(`Recommend task failed: ${err.message}`);
     }
   }
 );

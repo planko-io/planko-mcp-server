@@ -201,6 +201,18 @@ describe('api.boards', () => {
   });
 });
 
+describe('api.createRecommendation', () => {
+  it('POSTs the { type, payload } envelope as JSON to /recommendations', async () => {
+    const body = { type: 'new_task', payload: { title: 'Ship it', priority: 1 } };
+    await makeClient().createRecommendation(body);
+    expect(lastCall().url).toBe(`${BASE}/mcp-project-sync/recommendations`);
+    expect(lastCall().options.method).toBe('POST');
+    expect(lastCall().options.headers['x-api-key']).toBe('test-key');
+    expect(lastCall().options.headers['Content-Type']).toBe('application/json');
+    expect(bodyOf(lastCall())).toEqual(body);
+  });
+});
+
 describe('api.getTask url shaping', () => {
   it('GETs /tasks/:id', async () => {
     await makeClient().getTask('abc123');

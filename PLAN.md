@@ -38,7 +38,7 @@ Move these from `scripts/planko-mcp-sync.js` into ESM modules inside the package
 
 ## Step 3 — Define MCP Tools
 
-**As shipped**, the server exposes 20 tools: 3 folder-sync tools + 10 standalone CRUD tools + 7 standalone read tools. (The earlier `planko_pull`/`planko_push`/`planko_status` were folded into the bidirectional `planko_sync`/`planko_sync_preview`.) Since v0.6.0 every CRUD/read tool exists for tasks (type=1), notes (type=2) and sticky notes (type=3), `planko_list_all` lists the three kinds together, and list tools filter by kanban board/column (by name, resolved via `GET /mcp-project-sync/boards`, or by id). The README is the up-to-date tool reference.
+**As shipped**, the server exposes 21 tools: 3 folder-sync tools + 10 standalone CRUD tools + 7 standalone read tools + 1 recommendation tool. (The earlier `planko_pull`/`planko_push`/`planko_status` were folded into the bidirectional `planko_sync`/`planko_sync_preview`.) Since v0.6.0 every CRUD/read tool exists for tasks (type=1), notes (type=2) and sticky notes (type=3), `planko_list_all` lists the three kinds together, list tools filter by kanban board/column (by name, resolved via `GET /mcp-project-sync/boards`, or by id), and `planko_recommend_task` sends a `new_task` recommendation (PL274, `POST /mcp-project-sync/recommendations`) that the API key's owner accepts or rejects in Planko's notification centre — the task is created only on accept, and the outcome cannot be read back. Future recommendation types get their own flat tool over the same `src/recommend.js` builder rather than a generic `(type, payload)` tool, so the LLM always sees typed fields. The README is the up-to-date tool reference.
 
 Folder-sync tools:
 
@@ -118,7 +118,8 @@ index.js (entry point, #!/usr/bin/env node, ESM)
               ├── planko_list_tasks    → list tasks (type=1) with filters
               ├── planko_list_notes    → list notes (type=2) with filters
               ├── planko_view_task     → view one task by id
-              └── planko_view_note     → view one note by id (shared endpoint)
+              ├── planko_view_note     → view one note by id (shared endpoint)
+              └── planko_recommend_task → suggest a task the owner accepts/rejects (PL274)
 ```
 
 ## Step 5 — Configuration

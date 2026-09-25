@@ -129,6 +129,15 @@ export function createApiClient({ apiKey, apiBase }) {
       return request('DELETE', `/mcp-project-sync/tasks/${taskId}`);
     },
 
+    /**
+     * POST /mcp-project-sync/recommendations — suggest something to the API
+     * key's owner (PL274). Body { type, payload }; returns the Recommendation
+     * doc (status 'pending'). The task is only created when the owner accepts.
+     */
+    async createRecommendation(body) {
+      return request('POST', '/mcp-project-sync/recommendations', body);
+    },
+
     // --- Read (user-scoped, no folder sync required) ---
 
     /**
