@@ -650,7 +650,14 @@ const taskProps = {
     .nullable()
     .optional()
     .describe('Recurrence rule (null or one of the recurrence keywords)'),
-  repeatDate: z.string().optional().describe('Recurrence end/anchor date (ISO 8601 string)'),
+  // The backend stores an integer here (Joi.number().integer()), NOT a date:
+  // the weekday (1-7) for weekly repeats or the day of month (1-31) for monthly.
+  repeatDate: z
+    .number()
+    .int()
+    .nullable()
+    .optional()
+    .describe('Recurrence day (integer, not a date): weekday 1-7 for weekly, day of month 1-31 for monthly'),
   selectedWeekdays: z
     .array(z.number().int().min(0).max(6))
     .optional()

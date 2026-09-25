@@ -128,7 +128,7 @@ These work with the **same API key** and require **no folder setup**. Tasks, not
 | `alertLeadTime` | `null`\|`ontime`\|`15min`\|`30min`\|`1hour`\|`1day` | Reminder lead time |
 | `priority` | `1`\|`2`\|`3` | |
 | `repeat` | `null`\|`daily`\|`workdays`\|`weekly`\|`biweekly`\|`monthly`\|`custom_weekly`\|`yearly` | Recurrence rule |
-| `repeatDate` | ISO 8601 string | Recurrence anchor/end |
+| `repeatDate` | integer | Recurrence day, not a date: weekday `1`–`7` for `weekly`, day of month `1`–`31` for `monthly` |
 | `selectedWeekdays` | array of `0`–`6` | For `custom_weekly` (0=Sunday) |
 | `parentId` | ObjectId | Parent task, for subtasks |
 | `tags` | array of ObjectId | Tag ids |
