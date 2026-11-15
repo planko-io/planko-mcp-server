@@ -166,6 +166,7 @@ export function summarizeItem(item, index) {
   if (item.priority != null) parts.push(`priority: ${item.priority}`);
   if (item.dueDate) parts.push(`due: ${item.dueDate}${item.time ? ` ${item.time}` : ''}`);
   else if (item.datePlain) parts.push(`due: ${item.datePlain}${item.time ? ` ${item.time}` : ''}`);
+  if (item.type === TYPE_TASK && item.deadline) parts.push(`deadline: ${item.deadline}`);
   const tagStr = formatTags(item.tags);
   if (tagStr) parts.push(`tags: ${tagStr}`);
   const board = boardLabel(item);
@@ -207,6 +208,7 @@ export function renderItem(item) {
   if (item.priority != null) lines.push(`priority: ${item.priority}`);
   if (item.dueDate) lines.push(`due: ${item.dueDate}${item.time ? ` ${item.time}` : ''}`);
   else if (item.datePlain) lines.push(`due: ${item.datePlain}${item.time ? ` ${item.time}` : ''}`);
+  if (item.type === TYPE_TASK && item.deadline) lines.push(`deadline: ${item.deadline}`);
   const tagStr = formatTags(item.tags);
   if (tagStr) lines.push(`tags: ${tagStr}`);
   const board = boardLabel(item);
@@ -227,8 +229,8 @@ export function renderItem(item) {
   return lines.join('\n');
 }
 
-const SORTABLE_FIELDS = new Set(['dueDate', 'createdAt', 'updatedAt', 'priority', 'position', 'name']);
-const DATE_FIELDS = new Set(['dueDate', 'createdAt', 'updatedAt']);
+const SORTABLE_FIELDS = new Set(['dueDate', 'deadline', 'createdAt', 'updatedAt', 'priority', 'position', 'name']);
+const DATE_FIELDS = new Set(['dueDate', 'deadline', 'createdAt', 'updatedAt']);
 
 /** Parse 'field:dir' with the backend's whitelist; default updatedAt:desc. */
 export function parseSort(sortBy) {

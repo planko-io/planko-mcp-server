@@ -121,8 +121,9 @@ These work with the **same API key** and require **no folder setup**. Tasks, not
 | Property | Type | Notes |
 |---|---|---|
 | `description` | Markdown string | Converted to BlockNote JSON before saving |
-| `dueDate` | ISO 8601 string | |
-| `datePlain` | `YYYY-MM-DD` | |
+| `dueDate` | ISO 8601 string | Execution date — when the task appears on the agenda/day view |
+| `datePlain` | `YYYY-MM-DD` | Execution date, plain form — same meaning as `dueDate` |
+| `deadline` | `YYYY-MM-DD`\|`null` | **Tasks only** (`planko_create_task`, `planko_edit_task`, `planko_recommend_task` — never notes or sticky notes). The final deadline, independent of `dueDate`/`datePlain`. `null` clears it on edit |
 | `time` / `endTime` | `HH:MM` | Start / end time |
 | `alert` | boolean | Whether a reminder is enabled |
 | `alertLeadTime` | `null`\|`ontime`\|`15min`\|`30min`\|`1hour`\|`1day` | Reminder lead time |
@@ -146,8 +147,10 @@ Notes:
 
 ```
 planko_create_task(name: "Ship v2", projectName: "Work", dueDate: "2026-08-01", priority: 1)
+planko_create_task(name: "Renovar contrato", deadline: "2026-12-15")
 planko_create_note(name: "Meeting notes", description: "# Sync\n- point A\n- point B")
 planko_edit_task(taskId: "665f...c0", name: "Ship v2.1", alertLeadTime: "1hour")
+planko_edit_task(taskId: "665f...c0", deadline: null)
 planko_complete_task(taskId: "665f...c0")
 planko_delete_note(taskId: "665f...aa")
 ```
@@ -164,6 +167,7 @@ Notes:
 
 - The recipient is **always the owner of the API key**, never other project members, even when the suggestion targets a shared workspace project.
 - `description` is Markdown, converted to BlockNote like the create tools. `datePlain` is derived from the date part of `dueDate` when only `dueDate` is given, because the owner's notification card shows `datePlain` (plus `time` and `priority`).
+- `deadline` (`YYYY-MM-DD`) is accepted like on `planko_create_task`, applied to the task on accept.
 - A reference the owner cannot access (`projectId`, `parentId`, `tags`, `boardId`, `kanbanColumnId`) is rejected at send time with a `400`. A reference that becomes stale later is dropped when the owner accepts; the task is still created.
 - There is **no read-back**: the API has no endpoint to list recommendations or learn their outcome, and every call creates a new pending suggestion plus a new notification. Send each suggestion once; do not retry on a slow response.
 - Under `PLANKO_PROJECT_LOCK` the suggestion always targets the locked project (see below).
@@ -211,8 +215,9 @@ These also work with the **same API key** and require **no folder setup**. `list
 | `boardId` / `kanbanColumnId` | ObjectId | Direct id alternatives to the names (not offered under project lock) |
 | `tags` | array of ObjectId | AND semantics — item must have all tags |
 | `search` | string | Case-insensitive match on the name |
-| `dueDateFrom` / `dueDateTo` | `YYYY-MM-DD` | (tasks only) inclusive due-date bounds |
-| `sortBy` | `field:asc` \| `field:desc` | Fields: `dueDate`, `createdAt`, `updatedAt`, `priority`, `position`, `name`; default `updatedAt:desc` |
+| `dueDateFrom` / `dueDateTo` | `YYYY-MM-DD` | (tasks only) inclusive due-date (execution date) bounds |
+| `deadlineFrom` / `deadlineTo` | `YYYY-MM-DD` | Only on `planko_list_tasks` and `planko_list_all` (never `planko_list_notes`/`planko_list_sticky_notes`). Inclusive bounds on `deadline`. Matches **tasks only** (type=1); a recurring series appears as one item |
+| `sortBy` | `field:asc` \| `field:desc` | Fields: `dueDate`, `deadline`, `createdAt`, `updatedAt`, `priority`, `position`, `name`; default `updatedAt:desc` |
 | `limit` | int | Default 50, max 200 |
 | `page` | int | Default 1 |
 
@@ -224,6 +229,7 @@ Board/column filters are ANDed onto the list scope. Boards belong to a user or a
 
 ```
 planko_list_tasks(status: 1, priority: 1, dueDateFrom: "2026-07-20", dueDateTo: "2026-07-26", sortBy: "dueDate:asc")
+planko_list_tasks(deadlineFrom: "2026-12-01", deadlineTo: "2026-12-31", sortBy: "deadline:asc")
 planko_list_tasks(projectName: "Work", search: "invoice", limit: 20)
 planko_list_tasks(boardName: "Time Planko", kanbanColumnName: "In Progress")
 planko_list_sticky_notes(showCompleted: false)
