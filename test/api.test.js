@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { createApiClient } from '../src/api.js';
+import { createApiClient, createRunnerApiClient } from '../src/api.js';
 
 const BASE = 'https://api.example.test/v1';
 
@@ -220,5 +220,66 @@ describe('api.getTask url shaping', () => {
     expect(call.url).toBe(`${BASE}/mcp-project-sync/tasks/abc123`);
     expect(call.options.method).toBe('GET');
     expect(call.options.body).toBeUndefined();
+  });
+});
+
+describe('createRunnerApiClient (PL330 runner mode)', () => {
+  const TOKEN = 'pk_run_abc123';
+  const runner = () => createRunnerApiClient({ runnerToken: TOKEN, apiBase: BASE });
+
+  it('claims with the bearer token (never x-api-key) and an empty body by default', async () => {
+    await runner().claim();
+    const call = lastCall();
+    expect(call.url).toBe(`${BASE}/agent/runner/claim`);
+    expect(call.options.method).toBe('POST');
+    expect(call.options.headers.Authorization).toBe(`Bearer ${TOKEN}`);
+    expect(call.options.headers['x-api-key']).toBeUndefined();
+    expect(bodyOf(call)).toEqual({});
+  });
+
+  it('forwards waitSec on claim', async () => {
+    await runner().claim(10);
+    expect(bodyOf(lastCall())).toEqual({ waitSec: 10 });
+  });
+
+  it('finishes with result, error and claimSeq', async () => {
+    await runner().finish('t1', { result: '# ok', error: true, claimSeq: 3 });
+    const call = lastCall();
+    expect(call.url).toBe(`${BASE}/agent/runner/tasks/t1/finish`);
+    expect(bodyOf(call)).toEqual({ result: '# ok', error: true, claimSeq: 3 });
+  });
+
+  it('defaults error to false on finish', async () => {
+    await runner().finish('t1', { result: 'ok', claimSeq: 1 });
+    expect(bodyOf(lastCall()).error).toBe(false);
+  });
+
+  it('posts subtask suggestions under the parent', async () => {
+    await runner().suggestSubtask('p1', { name: 'sub', agentTimeoutMin: 5 });
+    const call = lastCall();
+    expect(call.url).toBe(`${BASE}/agent/runner/tasks/p1/subtasks`);
+    expect(bodyOf(call)).toEqual({ name: 'sub', agentTimeoutMin: 5 });
+  });
+
+  it('puts the HTTP status in the error message', async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 409,
+      text: async () => JSON.stringify({ code: 409, message: 'Task is not running under this claim' }),
+    }));
+    await expect(runner().finish('t1', { result: 'x', claimSeq: 1 })).rejects.toThrow(
+      'HTTP 409: Task is not running under this claim'
+    );
+  });
+});
+
+describe('createApiClient error messages', () => {
+  it('keeps the plain backend message for the user client', async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      text: async () => JSON.stringify({ message: 'Invalid projectId' }),
+    }));
+    await expect(makeClient().getTask('x')).rejects.toThrow(/^Invalid projectId$/);
   });
 });
