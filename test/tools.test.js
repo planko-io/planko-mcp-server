@@ -201,3 +201,91 @@ describe('registerStandaloneTools', () => {
     expect(() => registerStandaloneTools(server, { api: fakeApi() })).not.toThrow();
   });
 });
+
+describe('deadline (PL328)', () => {
+  const TASK_ONLY_TOOLS = ['planko_create_task', 'planko_edit_task', 'planko_recommend_task'];
+  const NO_DEADLINE_TOOLS = [
+    'planko_create_note',
+    'planko_create_sticky_note',
+    'planko_edit_note',
+    'planko_edit_sticky_note',
+  ];
+
+  it('only exposes deadline on create_task, edit_task and recommend_task', () => {
+    const server = fakeServer();
+    registerStandaloneTools(server, { api: fakeApi() });
+    for (const name of TASK_ONLY_TOOLS) {
+      expect(server.tools[name].config.inputSchema).toHaveProperty('deadline');
+    }
+    for (const name of NO_DEADLINE_TOOLS) {
+      expect(server.tools[name].config.inputSchema).not.toHaveProperty('deadline');
+    }
+  });
+
+  it('describes dueDate/datePlain as the execution date, independent of deadline', () => {
+    const server = fakeServer();
+    registerStandaloneTools(server, { api: fakeApi() });
+    const { dueDate, datePlain } = server.tools.planko_create_task.config.inputSchema;
+    expect(dueDate.description).toMatch(/execution/i);
+    expect(datePlain.description).toMatch(/execution/i);
+  });
+
+  it('create_task forwards a deadline value to the API', async () => {
+    const server = fakeServer();
+    const api = fakeApi();
+    registerStandaloneTools(server, { api });
+    await server.tools.planko_create_task.handler({ name: 'Ship it', deadline: '2026-12-01' });
+    expect(api.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({ deadline: '2026-12-01' })
+    );
+  });
+
+  it('edit_task sends an explicit null to clear the deadline', async () => {
+    const server = fakeServer();
+    const api = fakeApi();
+    registerStandaloneTools(server, { api });
+    const taskId = 'a'.repeat(24);
+    await server.tools.planko_edit_task.handler({ taskId, deadline: null });
+    expect(api.updateTask).toHaveBeenCalledWith(taskId, expect.objectContaining({ deadline: null }));
+  });
+
+  it('edit_task treats an empty string deadline as null', async () => {
+    const server = fakeServer();
+    const api = fakeApi();
+    registerStandaloneTools(server, { api });
+    const taskId = 'a'.repeat(24);
+    await server.tools.planko_edit_task.handler({ taskId, deadline: '' });
+    expect(api.updateTask).toHaveBeenCalledWith(taskId, expect.objectContaining({ deadline: null }));
+  });
+
+  it('edit_task omits deadline entirely when not provided', async () => {
+    const server = fakeServer();
+    const api = fakeApi();
+    registerStandaloneTools(server, { api });
+    const taskId = 'a'.repeat(24);
+    await server.tools.planko_edit_task.handler({ taskId, name: 'Renamed' });
+    expect(api.updateTask).toHaveBeenCalledWith(taskId, expect.not.objectContaining({ deadline: expect.anything() }));
+    const [, body] = api.updateTask.mock.calls[0];
+    expect(body).not.toHaveProperty('deadline');
+  });
+
+  it('exposes deadlineFrom/deadlineTo only for list_tasks and list_all, never list_notes/list_sticky_notes', () => {
+    const server = fakeServer();
+    registerStandaloneTools(server, { api: fakeApi() });
+    expect(server.tools.planko_list_tasks.config.inputSchema).toHaveProperty('deadlineFrom');
+    expect(server.tools.planko_list_tasks.config.inputSchema).toHaveProperty('deadlineTo');
+    expect(server.tools.planko_list_all.config.inputSchema).toHaveProperty('deadlineFrom');
+    expect(server.tools.planko_list_notes.config.inputSchema).not.toHaveProperty('deadlineFrom');
+    expect(server.tools.planko_list_sticky_notes.config.inputSchema).not.toHaveProperty('deadlineFrom');
+  });
+
+  it('forwards deadlineFrom/deadlineTo as API query params', async () => {
+    const server = fakeServer();
+    const api = fakeApi();
+    registerStandaloneTools(server, { api });
+    await server.tools.planko_list_tasks.handler({ deadlineFrom: '2026-01-01', deadlineTo: '2026-01-31' });
+    expect(api.listTasks).toHaveBeenCalledWith(
+      expect.objectContaining({ deadlineFrom: '2026-01-01', deadlineTo: '2026-01-31' })
+    );
+  });
+});

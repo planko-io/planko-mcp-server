@@ -50,6 +50,13 @@ describe('buildRecommendationBody', () => {
       dueDate: 'tomorrow',
     });
   });
+
+  it('forwards deadline (PL328) like any other task attribute', () => {
+    expect(buildRecommendationBody('x', { deadline: '2026-12-01' }).payload).toEqual({
+      title: 'x',
+      deadline: '2026-12-01',
+    });
+  });
 });
 
 describe('renderRecommendation', () => {

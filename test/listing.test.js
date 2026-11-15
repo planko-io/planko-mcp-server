@@ -187,6 +187,35 @@ describe('summarizeItem / renderItem', () => {
   });
 });
 
+describe('deadline in summarizeItem / renderItem (PL328)', () => {
+  it('shows deadline for a task', () => {
+    const out = summarizeItem({ _id: 'x', name: 'n', type: 1, status: 1, deadline: '2026-12-01' }, 1);
+    expect(out).toContain('deadline: 2026-12-01');
+  });
+
+  it('omits deadline for a task without one', () => {
+    const out = summarizeItem({ _id: 'x', name: 'n', type: 1, status: 1 }, 1);
+    expect(out).not.toContain('deadline:');
+  });
+
+  it('never shows deadline for a note, even if present on the payload', () => {
+    const out = summarizeItem({ _id: 'x', name: 'n', type: 2, status: 1, deadline: '2026-12-01' }, 1);
+    expect(out).not.toContain('deadline:');
+  });
+
+  it('never shows deadline for a sticky note, even if present on the payload', () => {
+    const out = summarizeItem({ _id: 'x', name: 'n', type: 3, status: 1, deadline: '2026-12-01' }, 1);
+    expect(out).not.toContain('deadline:');
+  });
+
+  it('renderItem shows deadline for a task and omits it for other types', () => {
+    const taskOut = renderItem({ _id: 'x', name: 'n', type: 1, status: 1, deadline: '2026-12-01', description: null });
+    expect(taskOut).toContain('deadline: 2026-12-01');
+    const noteOut = renderItem({ _id: 'x', name: 'n', type: 2, status: 1, deadline: '2026-12-01', description: null });
+    expect(noteOut).not.toContain('deadline:');
+  });
+});
+
 describe('renderList', () => {
   it('reports an empty result with totals', () => {
     expect(renderList({ tasks: [], total: 0, page: 1 }, 'sticky notes')).toBe(
@@ -228,6 +257,13 @@ describe('mergeAllLists / renderAll', () => {
     expect(parseSort('nope:asc')).toEqual({ field: 'updatedAt', dir: 'desc' });
     expect(parseSort(undefined)).toEqual({ field: 'updatedAt', dir: 'desc' });
     expect(parseSort('priority:asc')).toEqual({ field: 'priority', dir: 'asc' });
+  });
+
+  it('accepts deadline as a sortable field', () => {
+    expect(parseSort('deadline:asc')).toEqual({ field: 'deadline', dir: 'asc' });
+    const t = { tasks: [{ _id: 'b', deadline: '2026-12-05' }, { _id: 'a', deadline: '2026-11-01' }], total: 2 };
+    const n = { tasks: [], total: 0 };
+    expect(mergeAllLists(t, n, 50, 'deadline:asc').tasks.map((x) => x._id)).toEqual(['a', 'b']);
   });
 
   it('cuts the union to limit', () => {
