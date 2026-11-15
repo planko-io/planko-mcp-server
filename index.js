@@ -4,7 +4,9 @@
  * planko-mcp-server — MCP server for syncing Planko tasks with local .md files.
  *
  * Environment variables:
- *   PLANKO_API_KEY  (required) — user-scoped MCP API key
+ *   PLANKO_API_KEY  (required in user mode) — user-scoped MCP API key
+ *   PLANKO_RUNNER_TOKEN — runner token (pk_run_…); when set, the server starts in
+ *     runner mode and exposes ONLY the runner tools (PLANKO_API_KEY not required)
  *   PLANKO_API_BASE — optional API base URL override
  *
  * Tools:
@@ -14,6 +16,9 @@
  *   planko_complete_task — works on any item id
  *   planko_list_all — tasks + sticky notes + notes in one listing
  *   planko_recommend_task — suggest a task for the account owner to accept/reject
+ *
+ * Runner mode tools (PL330 agentic tasks):
+ *   planko_agent_claim / planko_agent_finish / planko_agent_suggest_subtask
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -23,8 +28,9 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 
-import { createApiClient } from './src/api.js';
+import { createApiClient, createRunnerApiClient } from './src/api.js';
 import { registerStandaloneTools, toolOk, toolError } from './src/tools.js';
+import { registerRunnerTools } from './src/runnerTools.js';
 import {
   markdownToBlockNote,
   descriptionToMarkdown,
@@ -46,8 +52,11 @@ import {
 
 // --- Startup validation ---
 
+// PL330: runner mode — token-scoped, exclusive (no user-wide CRUD), no API key needed.
+const RUNNER_TOKEN = (process.env.PLANKO_RUNNER_TOKEN || '').trim();
+
 const API_KEY = process.env.PLANKO_API_KEY;
-if (!API_KEY) {
+if (!API_KEY && !RUNNER_TOKEN) {
   console.error(
     'Fatal: PLANKO_API_KEY environment variable is required.'
   );
@@ -579,6 +588,12 @@ registerStandaloneTools(server, { api, projectLock: PROJECT_LOCK });
 // --- Start server ---
 
 async function main() {
+  if (RUNNER_TOKEN) {
+    const runnerServer = new McpServer({ name: 'planko-runner', version: PKG_VERSION });
+    registerRunnerTools(runnerServer, { api: createRunnerApiClient({ runnerToken: RUNNER_TOKEN }) });
+    await runnerServer.connect(new StdioServerTransport());
+    return;
+  }
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

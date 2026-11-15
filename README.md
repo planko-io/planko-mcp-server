@@ -255,7 +255,8 @@ Sync order: delete, pull, push. Local changes overwrite remote on conflict.
 
 | Variable | Required | Description |
 |---|---|---|
-| `PLANKO_API_KEY` | Yes | Your MCP API key from app.planko.io/integrations |
+| `PLANKO_API_KEY` | Yes (user mode) | Your MCP API key from app.planko.io/integrations |
+| `PLANKO_RUNNER_TOKEN` | No | Runner token (`pk_run_…`). When set, the server starts in **runner mode** (see below) and `PLANKO_API_KEY` is not required. |
 | `PLANKO_API_BASE` | No | API base URL override (defaults to production) |
 | `PLANKO_PROJECT_LOCK` | No | Confine every operation to a single project id (see below). **Off by default** — when unset the server behaves exactly as before. |
 
@@ -303,6 +304,44 @@ applies and the server is fully backward-compatible.
       "env": {
         "PLANKO_API_KEY": "your-api-key",
         "PLANKO_PROJECT_LOCK": "6742635e764bda007ab987ed"
+      }
+    }
+  }
+}
+```
+
+### Runner mode (`PLANKO_RUNNER_TOKEN`)
+
+Runner mode serves the agent that executes Planko **agentic tasks**. It is enabled by
+setting `PLANKO_RUNNER_TOKEN` to a runner token generated in the Planko app (screen
+*Agente → Conectar agente*). A runner token:
+
+- belongs to one user and is bound to **one or more projects** of that user — the
+  runner only ever sees that user's queued agentic tasks of those projects;
+- is **shown once**, when it is created; Planko stores only its hash. Lost token →
+  create a new one. Revoking it stops the runner immediately and returns any task it
+  was running to the queue.
+
+Runner mode is **exclusive**: it registers only the three runner tools below (no user
+CRUD, no folder sync), all authenticated with the runner token:
+
+| Tool | What it does |
+|---|---|
+| `planko_agent_claim` | Long-poll for the oldest queued agentic task (`waitSeconds` 0–25). Returns its id, `claimSeq`, name, project, timeout, instructions (Markdown) and the parent context for a subtask, or `No task available.` |
+| `planko_agent_finish` | Report the result (Markdown) of a claimed task with the `claimSeq` returned by the claim, and `error: true` when it failed. The task goes to validation, or is concluded automatically when its recurring model does not require validation. |
+| `planko_agent_suggest_subtask` | Suggest a subtask (name, Markdown instructions, optional `timeoutMin`) under an agentic task. The owner accepts or rejects it in the app. |
+
+Every error (invalid/revoked token, task outside the token's scope, stale claim) is
+returned as a tool error carrying the HTTP status.
+
+```json
+{
+  "mcpServers": {
+    "planko-runner": {
+      "command": "npx",
+      "args": ["-y", "planko-mcp-server"],
+      "env": {
+        "PLANKO_RUNNER_TOKEN": "pk_run_..."
       }
     }
   }

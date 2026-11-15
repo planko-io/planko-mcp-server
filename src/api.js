@@ -7,12 +7,15 @@
 
 const DEFAULT_API_BASE = 'https://api.planko.io/v1';
 
-export function createApiClient({ apiKey, apiBase }) {
-  const base = apiBase || process.env.PLANKO_API_BASE || DEFAULT_API_BASE;
-
-  async function request(method, path, body) {
+/**
+ * Build a JSON request function bound to a base URL and auth headers.
+ * `statusInMessage` prefixes errors with the HTTP status (runner mode: the agent
+ * must see *why* a call failed). The user client keeps the plain backend message.
+ */
+function makeRequest({ base, headers: authHeaders, statusInMessage = false }) {
+  return async function request(method, path, body) {
     const url = `${base}${path}`;
-    const headers = { 'x-api-key': apiKey };
+    const headers = { ...authHeaders };
 
     const options = { method, headers };
 
@@ -36,11 +39,18 @@ export function createApiClient({ apiKey, apiBase }) {
         typeof data === 'object' && data.message
           ? data.message
           : `API returned HTTP ${res.status}`;
-      throw new Error(msg);
+      const err = new Error(statusInMessage ? `HTTP ${res.status}: ${msg}` : msg);
+      err.status = res.status;
+      throw err;
     }
 
     return data;
-  }
+  };
+}
+
+export function createApiClient({ apiKey, apiBase }) {
+  const base = apiBase || process.env.PLANKO_API_BASE || DEFAULT_API_BASE;
+  const request = makeRequest({ base, headers: { 'x-api-key': apiKey } });
 
   return {
     /**
@@ -170,5 +180,29 @@ export function createApiClient({ apiKey, apiBase }) {
     async getTask(taskId) {
       return request('GET', `/mcp-project-sync/tasks/${taskId}`);
     },
+  };
+}
+
+/**
+ * PL330 — API client of the agentic-tasks runner, authenticated with a runner
+ * token (`pk_run_…`, per project), never with the user API key.
+ */
+export function createRunnerApiClient({ runnerToken, apiBase }) {
+  const request = makeRequest({
+    base: apiBase || process.env.PLANKO_API_BASE || DEFAULT_API_BASE,
+    headers: { Authorization: `Bearer ${runnerToken}` },
+    statusInMessage: true,
+  });
+
+  return {
+    /** POST /agent/runner/claim — long-poll; { task } or { task: null } */
+    claim: (waitSec) => request('POST', '/agent/runner/claim', waitSec == null ? {} : { waitSec }),
+
+    /** POST /agent/runner/tasks/:taskId/finish — bound to the claim by claimSeq */
+    finish: (taskId, { result, error, claimSeq }) =>
+      request('POST', `/agent/runner/tasks/${taskId}/finish`, { result, error: !!error, claimSeq }),
+
+    /** POST /agent/runner/tasks/:taskId/subtasks — suggest a subtask under an agentic task */
+    suggestSubtask: (taskId, body) => request('POST', `/agent/runner/tasks/${taskId}/subtasks`, body),
   };
 }
