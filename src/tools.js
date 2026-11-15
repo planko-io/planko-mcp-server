@@ -68,12 +68,21 @@ export function registerStandaloneTools(server, { api, projectLock = null, wrapH
       .string()
       .optional()
       .describe('Body as Markdown (converted to BlockNote JSON before saving)'),
-    dueDate: z.string().optional().describe('Due date (ISO 8601 string)'),
+    dueDate: z
+      .string()
+      .optional()
+      .describe(
+        'Execution date (ISO 8601 string): when the task appears on the agenda/day view. ' +
+          'Independent of deadline (the final deadline, when supported).'
+      ),
     datePlain: z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD')
       .optional()
-      .describe('Plain date, YYYY-MM-DD'),
+      .describe(
+        'Execution date, plain YYYY-MM-DD: when the task appears on the agenda/day view. ' +
+          'Independent of deadline (the final deadline, when supported).'
+      ),
     time: z.string().regex(timeRegex, 'Must be HH:MM').optional().describe('Start time, HH:MM'),
     endTime: z.string().regex(timeRegex, 'Must be HH:MM').optional().describe('End time, HH:MM'),
     alert: z.boolean().optional().describe('Whether an alert/reminder is enabled'),
@@ -109,13 +118,43 @@ export function registerStandaloneTools(server, { api, projectLock = null, wrapH
     boardId: objectId.optional().describe('Board id'),
   };
 
+  // Task-only properties (PL328): never offered on note/sticky-note tools.
+  // `deadline` is independent of dueDate/datePlain (the execution date) — it is
+  // the day by which the task must be done. `null` clears it; omitted leaves it
+  // unchanged.
+  const deadlineProps = {
+    deadline: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD')
+      .nullable()
+      .optional()
+      .describe(
+        'Prazo final (YYYY-MM-DD): até quando a tarefa precisa estar pronta. ' +
+          'É independente de dueDate/datePlain (data de execução, quando a tarefa aparece na agenda). ' +
+          'null remove o prazo. Só para tarefas (type=1) — nunca para notas ou sticky notes.'
+      ),
+  };
+
+  // Fields that support an explicit null to clear a value on edit (as opposed to
+  // isBlankValue's "omitted" semantics, which would otherwise drop the null).
+  // '' is treated the same as null so a model that sends an empty string still
+  // clears the field.
+  const NULLABLE_CLEAR_FIELDS = new Set(['deadline']);
+
   /**
    * Build a request body from tool params: drop undefined values and convert the
-   * Markdown `description` into BlockNote JSON.
+   * Markdown `description` into BlockNote JSON. Fields in NULLABLE_CLEAR_FIELDS
+   * keep an explicit null (and treat '' as null) so the model can clear them;
+   * omitted stays omitted.
    */
   function buildTaskBody(params) {
     const body = {};
     for (const [key, value] of Object.entries(params)) {
+      if (NULLABLE_CLEAR_FIELDS.has(key)) {
+        if (value === undefined) continue;
+        body[key] = value === '' ? null : value;
+        continue;
+      }
       if (isBlankValue(value)) continue;
       body[key] = value;
     }
@@ -230,6 +269,7 @@ export function registerStandaloneTools(server, { api, projectLock = null, wrapH
           .optional()
           .describe('Project name to create the task in (optional — omit for your default project)'),
         ...taskProps,
+        ...deadlineProps,
       },
       annotations: ANNOTATIONS.WRITE,
     },
@@ -308,6 +348,7 @@ export function registerStandaloneTools(server, { api, projectLock = null, wrapH
           .optional()
           .describe('Project name the task would be created in (optional — omit for the owner\'s default project)'),
         ...taskProps,
+        ...deadlineProps,
       },
       annotations: ANNOTATIONS.WRITE,
     },
@@ -357,6 +398,7 @@ export function registerStandaloneTools(server, { api, projectLock = null, wrapH
         type: editableType,
         projectId: objectId.optional().describe('Move to a different project by id'),
         ...taskProps,
+        ...deadlineProps,
       },
       annotations: ANNOTATIONS.IDEMPOTENT_WRITE,
     },
@@ -519,7 +561,7 @@ export function registerStandaloneTools(server, { api, projectLock = null, wrapH
   const sortBySchema = z
     .string()
     .describe(
-      "Sort as 'field:asc' or 'field:desc'. Allowed fields: dueDate, createdAt, updatedAt, priority, position, name. Default updatedAt:desc."
+      "Sort as 'field:asc' or 'field:desc'. Allowed fields: dueDate, deadline, createdAt, updatedAt, priority, position, name. Default updatedAt:desc."
     );
 
   /**
@@ -634,6 +676,7 @@ export function registerStandaloneTools(server, { api, projectLock = null, wrapH
   // are offered for every task-page kind (sticky notes carry the same fields).
   function listSchema(kind) {
     const taskLike = kind !== 'note';
+    const deadlineLike = kind === 'task' || kind === 'all';
     const base = { showCompleted: listShowCompleted };
     if (taskLike) base.status = listStatus;
     const tail = {
@@ -645,6 +688,22 @@ export function registerStandaloneTools(server, { api, projectLock = null, wrapH
         ? {
             dueDateFrom: datePlain.optional().describe('Inclusive lower bound on due date (YYYY-MM-DD)'),
             dueDateTo: datePlain.optional().describe('Inclusive upper bound on due date (YYYY-MM-DD)'),
+          }
+        : {}),
+      ...(deadlineLike
+        ? {
+            deadlineFrom: datePlain
+              .optional()
+              .describe(
+                'Inclusive lower bound on deadline/prazo final (YYYY-MM-DD). Tasks only (type=1): never matches ' +
+                  'notes or sticky notes. A recurring series appears as one item.'
+              ),
+            deadlineTo: datePlain
+              .optional()
+              .describe(
+                'Inclusive upper bound on deadline/prazo final (YYYY-MM-DD). Tasks only (type=1): never matches ' +
+                  'notes or sticky notes. A recurring series appears as one item.'
+              ),
           }
         : {}),
       sortBy: listSortBy,
