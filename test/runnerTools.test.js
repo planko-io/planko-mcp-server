@@ -65,6 +65,8 @@ describe('registerRunnerTools (PL330)', () => {
           claimSeq: 4,
           projectName: 'Agente',
           agentTimeoutMin: 30,
+          humanInstructions: 'Opção B',
+          humanInstructionsLabel: 'Decidir entre A, B ou outro',
           parent: { id: 'c'.repeat(24), name: 'Pai', description: markdownToDescription('contexto do pai'), type: 4 },
         },
       })),
@@ -75,6 +77,7 @@ describe('registerRunnerTools (PL330)', () => {
     const text = res.content[0].text;
     const json = JSON.parse(text.slice(text.indexOf('{')));
     expect(json).toMatchObject({ id: ID, claimSeq: 4, name: 'Relatório', projectName: 'Agente', timeoutMin: 30 });
+    expect(json).toMatchObject({ humanInstructions: 'Opção B', humanInstructionsLabel: 'Decidir entre A, B ou outro' });
     expect(json.instructions).toContain('# Faça o relatório');
     expect(json.parentContext).toMatchObject({ id: 'c'.repeat(24), name: 'Pai' });
     expect(json.parentContext.instructions).toContain('contexto do pai');
@@ -89,6 +92,7 @@ describe('registerRunnerTools (PL330)', () => {
     const json = JSON.parse(text.slice(text.indexOf('{')));
     expect(json.instructions).toBe('texto puro');
     expect(json.parentContext).toBeNull();
+    expect(json).toMatchObject({ humanInstructions: null, humanInstructionsLabel: null });
   });
 
   it('finish forwards result, error and claimSeq', async () => {
@@ -121,6 +125,33 @@ describe('registerRunnerTools (PL330)', () => {
     });
     expect(res.isError).toBeUndefined();
     expect(res.content[0].text).toMatch(/Suggested subtask "Revisar"/);
+  });
+
+  it('suggest forwards requireHumanInstructions + label (PL331)', async () => {
+    const { server, api } = setup();
+    const res = await server.tools.planko_agent_suggest_subtask.handler({
+      parentTaskId: ID,
+      name: 'Decidir',
+      requireHumanInstructions: true,
+      humanInstructionsLabel: 'Decidir entre A, B, C ou outro',
+    });
+    expect(api.suggestSubtask).toHaveBeenCalledWith(ID, {
+      name: 'Decidir',
+      requireHumanInstructions: true,
+      humanInstructionsLabel: 'Decidir entre A, B, C ou outro',
+    });
+    expect(res.content[0].text).toMatch(/needs the owner instructions/);
+    const { config } = server.tools.planko_agent_suggest_subtask;
+    expect(config.description).toMatch(/requireHumanInstructions/);
+    expect(config.inputSchema.humanInstructionsLabel.safeParse('x'.repeat(201)).success).toBe(false);
+  });
+
+  it('suggest with requireHumanInstructions and no label → tool error, no api call (PL331)', async () => {
+    const { server, api } = setup();
+    const res = await server.tools.planko_agent_suggest_subtask.handler({ parentTaskId: ID, name: 'Decidir', requireHumanInstructions: true });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toMatch(/humanInstructionsLabel is required/);
+    expect(api.suggestSubtask).not.toHaveBeenCalled();
   });
 
   it('returns isError with the message when the api fails', async () => {

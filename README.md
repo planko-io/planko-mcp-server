@@ -333,9 +333,9 @@ CRUD, no folder sync), all authenticated with the runner token:
 
 | Tool | What it does |
 |---|---|
-| `planko_agent_claim` | Long-poll for the oldest queued agentic task (`waitSeconds` 0–25). Returns its id, `claimSeq`, name, project, timeout, instructions (Markdown) and the parent context for a subtask, or `No task available.` |
+| `planko_agent_claim` | Long-poll for the oldest queued agentic task (`waitSeconds` 0–25). Returns its id, `claimSeq`, name, project, timeout, instructions (Markdown), the owner's `humanInstructions` (+ `humanInstructionsLabel`, null when empty) and the parent context for a subtask, or `No task available.` |
 | `planko_agent_finish` | Report the result (Markdown) of a claimed task with the `claimSeq` returned by the claim, and `error: true` when it failed. The task goes to validation, or is concluded automatically when its recurring model does not require validation. |
-| `planko_agent_suggest_subtask` | Suggest a subtask (name, Markdown instructions, optional `timeoutMin`) under an agentic task. The owner accepts or rejects it in the app. |
+| `planko_agent_suggest_subtask` | Suggest a subtask (name, Markdown instructions, optional `timeoutMin`) under an agentic task. The owner accepts or rejects it in the app. With `requireHumanInstructions: true` (+ `humanInstructionsLabel`, ≤200 chars, e.g. "Decidir entre A, B, C ou outro") the owner must fill in "Instruções humanas" before accepting — for a decision between options or an instruction only the owner can give. |
 
 Every error (invalid/revoked token, task outside the token's scope, stale claim) is
 returned as a tool error carrying the HTTP status.
