@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { registerRunnerTools } from '../src/runnerTools.js';
+import { registerRunnerTools, claimPayload, runMetaSchema } from '../src/runnerTools.js';
 import { markdownToDescription } from '../src/converters.js';
 
 const RUNNER_TOOLS = ['planko_agent_claim', 'planko_agent_finish', 'planko_agent_suggest_subtask'];
@@ -24,6 +24,13 @@ function fakeApi(overrides = {}) {
     ...overrides,
   };
 }
+
+const claimJson = (res) => {
+  const text = res.content[0].text;
+  return JSON.parse(text.slice(text.indexOf('{')));
+};
+
+const server = () => setup().server;
 
 const setup = (api = fakeApi()) => {
   const server = fakeServer();
@@ -55,7 +62,7 @@ describe('registerRunnerTools (PL330)', () => {
     expect(res.content[0].text).toBe('No task available.');
   });
 
-  it('claim converts BlockNote to markdown, includes claimSeq and the parent context', async () => {
+  it('claim converts BlockNote to markdown into description, includes claimSeq and the parent context', async () => {
     const api = fakeApi({
       claim: vi.fn(async () => ({
         task: {
@@ -65,8 +72,6 @@ describe('registerRunnerTools (PL330)', () => {
           claimSeq: 4,
           projectName: 'Agente',
           agentTimeoutMin: 30,
-          humanInstructions: 'Opção B',
-          humanInstructionsLabel: 'Decidir entre A, B ou outro',
           parent: { id: 'c'.repeat(24), name: 'Pai', description: markdownToDescription('contexto do pai'), type: 4 },
         },
       })),
@@ -74,13 +79,12 @@ describe('registerRunnerTools (PL330)', () => {
     const { server } = setup(api);
     const res = await server.tools.planko_agent_claim.handler({});
     expect(api.claim).toHaveBeenCalledWith(undefined);
-    const text = res.content[0].text;
-    const json = JSON.parse(text.slice(text.indexOf('{')));
+    const json = claimJson(res);
     expect(json).toMatchObject({ id: ID, claimSeq: 4, name: 'Relatório', projectName: 'Agente', timeoutMin: 30 });
-    expect(json).toMatchObject({ humanInstructions: 'Opção B', humanInstructionsLabel: 'Decidir entre A, B ou outro' });
-    expect(json.instructions).toContain('# Faça o relatório');
+    expect(json.description).toContain('# Faça o relatório');
     expect(json.parentContext).toMatchObject({ id: 'c'.repeat(24), name: 'Pai' });
-    expect(json.parentContext.instructions).toContain('contexto do pai');
+    expect(json.parentContext.description).toContain('contexto do pai');
+    expect(json.parentContext.instructions).toBeUndefined();
   });
 
   it('claim keeps a plain-text description as is and has a null parent context', async () => {
@@ -88,11 +92,78 @@ describe('registerRunnerTools (PL330)', () => {
       claim: vi.fn(async () => ({ task: { id: ID, name: 'x', description: 'texto puro', claimSeq: 1, parent: null } })),
     });
     const { server } = setup(api);
-    const text = (await server.tools.planko_agent_claim.handler({})).content[0].text;
-    const json = JSON.parse(text.slice(text.indexOf('{')));
-    expect(json.instructions).toBe('texto puro');
+    const json = claimJson(await server.tools.planko_agent_claim.handler({}));
+    expect(json.description).toBe('texto puro');
     expect(json.parentContext).toBeNull();
-    expect(json).toMatchObject({ humanInstructions: null, humanInstructionsLabel: null });
+  });
+
+  it('claim returns the nine standardized fields with the back names and never the human instructions (E9)', async () => {
+    const rejections = [{ at: '2026-11-20T10:00:00.000Z', reason: 'curto demais', kind: 'execution' }];
+    const api = fakeApi({
+      claim: vi.fn(async () => ({
+        task: {
+          id: ID,
+          name: 'Relatório',
+          description: 'texto',
+          claimSeq: 2,
+          projectName: null,
+          agentTimeoutMin: 60,
+          context: { attachments: [{ attachmentId: 'd'.repeat(24), name: 'nota.md', size: 12, mime: 'text/markdown', extra: 1 }] },
+          output: { suggestSubtasks: false },
+          level: 'baixo',
+          sourceId: 'e'.repeat(24),
+          executorKind: 'claude_code',
+          instructions: 'Leia o README antes.',
+          availableAt: '2026-11-24T10:00:00.000Z',
+          releaseCount: 2,
+          recentRejections: rejections,
+          humanInstructions: 'Opção B',
+          humanInstructionsLabel: 'Decidir entre A, B ou outro',
+          parent: null,
+        },
+      })),
+    });
+    const { server } = setup(api);
+    const json = claimJson(await server.tools.planko_agent_claim.handler({}));
+    expect(json).toMatchObject({
+      context: { attachments: [{ attachmentId: 'd'.repeat(24), name: 'nota.md', size: 12, mime: 'text/markdown' }] },
+      output: { suggestSubtasks: false },
+      level: 'baixo',
+      sourceId: 'e'.repeat(24),
+      executorKind: 'claude_code',
+      instructions: 'Leia o README antes.',
+      availableAt: '2026-11-24T10:00:00.000Z',
+      releaseCount: 2,
+      recentRejections: rejections,
+    });
+    expect(json.context.attachments[0].extra).toBeUndefined();
+    expect(json.projectName).toBeNull();
+    expect(json).not.toHaveProperty('humanInstructions');
+    expect(json).not.toHaveProperty('humanInstructionsLabel');
+  });
+
+  it('claim from a back without the new fields gets safe defaults (E9)', async () => {
+    const api = fakeApi({
+      claim: vi.fn(async () => ({ task: { id: ID, name: 'x', description: 'y', claimSeq: 1, humanInstructions: 'z' } })),
+    });
+    const { server } = setup(api);
+    const json = claimJson(await server.tools.planko_agent_claim.handler({}));
+    expect(json).toMatchObject({
+      context: { attachments: [] },
+      output: { suggestSubtasks: true },
+      level: null,
+      sourceId: null,
+      executorKind: 'claude_code',
+      instructions: null,
+      availableAt: null,
+      releaseCount: 0,
+      recentRejections: [],
+    });
+    expect(json).not.toHaveProperty('humanInstructions');
+  });
+
+  it('claimPayload treats blank basic instructions as null', () => {
+    expect(claimPayload({ id: ID, claimSeq: 1, name: 'x', instructions: '   ' }).instructions).toBeNull();
   });
 
   it('finish forwards result, error and claimSeq', async () => {
@@ -100,6 +171,41 @@ describe('registerRunnerTools (PL330)', () => {
     const res = await server.tools.planko_agent_finish.handler({ taskId: ID, claimSeq: 2, result: '# feito', error: true });
     expect(api.finish).toHaveBeenCalledWith(ID, { result: '# feito', error: true, claimSeq: 2 });
     expect(res.content[0].text).toBe(`Finished task ${ID}: validacao`);
+  });
+
+  it('finish forwards runMeta when given (E9)', async () => {
+    const { server, api } = setup();
+    const runMeta = { executorKind: 'claude_code', costUsd: 0.01, steps: 3, durationMs: 1200, stoppedBy: 'submitted' };
+    await server.tools.planko_agent_finish.handler({ taskId: ID, claimSeq: 2, result: 'ok', runMeta });
+    expect(api.finish).toHaveBeenCalledWith(ID, { result: 'ok', error: false, claimSeq: 2, runMeta });
+  });
+
+  it('runMetaSchema accepts the §2.1 whitelist and refuses unknown keys or values', () => {
+    const full = {
+      executorKind: 'planko',
+      model: 'm',
+      level: 'baixo',
+      steps: 1,
+      inputTokens: 2,
+      outputTokens: 3,
+      costUsd: 0.1,
+      orFeeUsd: 0.01,
+      upstreamCostUsd: 0.09,
+      composioCalls: 4,
+      durationMs: 5,
+      queueLatencyMs: 6,
+      writes: 7,
+      egressDomains: ['example.com'],
+      memory: { added: ['a'], updated: [], removed: ['b'] },
+      stoppedBy: 'timeout',
+      traceId: 't',
+    };
+    expect(runMetaSchema.safeParse(full).success).toBe(true);
+    expect(runMetaSchema.safeParse({ stoppedBy: 'x' }).success).toBe(false);
+    expect(runMetaSchema.safeParse({ foo: 1 }).success).toBe(false);
+    expect(runMetaSchema.safeParse({ costUsd: -1 }).success).toBe(false);
+    const { config } = server().tools.planko_agent_finish;
+    expect(config.inputSchema.runMeta.safeParse(undefined).success).toBe(true);
   });
 
   it('finish reports an automatic conclusion', async () => {
@@ -127,31 +233,21 @@ describe('registerRunnerTools (PL330)', () => {
     expect(res.content[0].text).toMatch(/Suggested subtask "Revisar"/);
   });
 
-  it('suggest forwards requireHumanInstructions + label (PL331)', async () => {
+  it('suggest has no human-instructions fields and never forwards them (§12.9)', async () => {
     const { server, api } = setup();
+    const { config } = server.tools.planko_agent_suggest_subtask;
+    expect(config.inputSchema).not.toHaveProperty('requireHumanInstructions');
+    expect(config.inputSchema).not.toHaveProperty('humanInstructionsLabel');
+    expect(config.description).not.toMatch(/requireHumanInstructions|humanInstructionsLabel|Instruções humanas/);
+    expect(config.description).toMatch(/question and the options in the description/);
     const res = await server.tools.planko_agent_suggest_subtask.handler({
       parentTaskId: ID,
       name: 'Decidir',
       requireHumanInstructions: true,
-      humanInstructionsLabel: 'Decidir entre A, B, C ou outro',
+      humanInstructionsLabel: 'Decidir entre A, B ou outro',
     });
-    expect(api.suggestSubtask).toHaveBeenCalledWith(ID, {
-      name: 'Decidir',
-      requireHumanInstructions: true,
-      humanInstructionsLabel: 'Decidir entre A, B, C ou outro',
-    });
-    expect(res.content[0].text).toMatch(/needs the owner instructions/);
-    const { config } = server.tools.planko_agent_suggest_subtask;
-    expect(config.description).toMatch(/requireHumanInstructions/);
-    expect(config.inputSchema.humanInstructionsLabel.safeParse('x'.repeat(201)).success).toBe(false);
-  });
-
-  it('suggest with requireHumanInstructions and no label → tool error, no api call (PL331)', async () => {
-    const { server, api } = setup();
-    const res = await server.tools.planko_agent_suggest_subtask.handler({ parentTaskId: ID, name: 'Decidir', requireHumanInstructions: true });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toMatch(/humanInstructionsLabel is required/);
-    expect(api.suggestSubtask).not.toHaveBeenCalled();
+    expect(res.isError).toBeUndefined();
+    expect(api.suggestSubtask).toHaveBeenCalledWith(ID, { name: 'Decidir' });
   });
 
   it('returns isError with the message when the api fails', async () => {

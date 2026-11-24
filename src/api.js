@@ -185,7 +185,7 @@ export function createApiClient({ apiKey, apiBase }) {
 
 /**
  * PL330 — API client of the agentic-tasks runner, authenticated with a runner
- * token (`pk_run_…`, per project), never with the user API key.
+ * token (`pk_run_…`, per executor), never with the user API key.
  */
 export function createRunnerApiClient({ runnerToken, apiBase }) {
   const request = makeRequest({
@@ -198,9 +198,23 @@ export function createRunnerApiClient({ runnerToken, apiBase }) {
     /** POST /agent/runner/claim — long-poll; { task } or { task: null } */
     claim: (waitSec) => request('POST', '/agent/runner/claim', waitSec == null ? {} : { waitSec }),
 
-    /** POST /agent/runner/tasks/:taskId/finish — bound to the claim by claimSeq */
-    finish: (taskId, { result, error, claimSeq }) =>
-      request('POST', `/agent/runner/tasks/${taskId}/finish`, { result, error: !!error, claimSeq }),
+    /**
+     * POST /agent/runner/tasks/:taskId/finish — bound to the claim by claimSeq; optional runMeta
+     * (run summary, E9). A back older than E1a rejects the unknown key with a 400 that cites it:
+     * the finish is sent once more without runMeta so the task still closes.
+     */
+    finish: async (taskId, { result, error, claimSeq, runMeta }) => {
+      const path = `/agent/runner/tasks/${taskId}/finish`;
+      const body = { result, error: !!error, claimSeq };
+      if (runMeta && Object.keys(runMeta).length) body.runMeta = runMeta;
+      try {
+        return await request('POST', path, body);
+      } catch (err) {
+        if (!body.runMeta || err.status !== 400 || !/runMeta/.test(err.message)) throw err;
+        delete body.runMeta;
+        return request('POST', path, body);
+      }
+    },
 
     /** POST /agent/runner/tasks/:taskId/subtasks — suggest a subtask under an agentic task */
     suggestSubtask: (taskId, body) => request('POST', `/agent/runner/tasks/${taskId}/subtasks`, body),

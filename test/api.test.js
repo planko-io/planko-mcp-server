@@ -261,6 +261,45 @@ describe('createRunnerApiClient (PL330 runner mode)', () => {
     expect(bodyOf(call)).toEqual({ name: 'sub', agentTimeoutMin: 5 });
   });
 
+  describe('finish with runMeta (E9)', () => {
+    const RUN_META = { executorKind: 'claude_code', costUsd: 0.01, durationMs: 10 };
+    const respond = (...responses) => {
+      calls = [];
+      globalThis.fetch = vi.fn(async (url, options) => {
+        calls.push({ url, options });
+        const r = responses.shift() || { status: 200, body: { task: { id: 't1' } } };
+        return { ok: r.status < 400, status: r.status, text: async () => JSON.stringify(r.body) };
+      });
+    };
+
+    it('sends runMeta in one POST', async () => {
+      respond();
+      await runner().finish('t1', { result: 'ok', claimSeq: 2, runMeta: RUN_META });
+      expect(calls).toHaveLength(1);
+      expect(bodyOf(calls[0])).toEqual({ result: 'ok', error: false, claimSeq: 2, runMeta: RUN_META });
+    });
+
+    it('retries once without runMeta when an older back rejects it', async () => {
+      respond({ status: 400, body: { code: 400, message: '"runMeta" is not allowed' } }, { status: 200, body: { task: { id: 't1', agentStatus: 'validacao' } } });
+      const res = await runner().finish('t1', { result: 'ok', claimSeq: 2, runMeta: RUN_META });
+      expect(calls).toHaveLength(2);
+      expect(bodyOf(calls[1])).toEqual({ result: 'ok', error: false, claimSeq: 2 });
+      expect(res).toEqual({ task: { id: 't1', agentStatus: 'validacao' } });
+    });
+
+    it('throws on another 400 without retrying', async () => {
+      respond({ status: 400, body: { code: 400, message: '"result" is required' } });
+      await expect(runner().finish('t1', { result: 'ok', claimSeq: 2, runMeta: RUN_META })).rejects.toThrow('HTTP 400');
+      expect(calls).toHaveLength(1);
+    });
+
+    it('keeps the old body exactly without runMeta', async () => {
+      respond();
+      await runner().finish('t1', { result: 'ok', claimSeq: 2 });
+      expect(calls[0].options.body).toBe(JSON.stringify({ result: 'ok', error: false, claimSeq: 2 }));
+    });
+  });
+
   it('puts the HTTP status in the error message', async () => {
     globalThis.fetch = vi.fn(async () => ({
       ok: false,
