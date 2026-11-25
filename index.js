@@ -17,8 +17,12 @@
  *   planko_list_all — tasks + sticky notes + notes in one listing
  *   planko_recommend_task — suggest a task for the account owner to accept/reject
  *
- * Runner mode tools (PL330 agentic tasks):
- *   planko_agent_claim / planko_agent_finish / planko_agent_suggest_subtask
+ * Runner mode tools (PL330 agentic tasks; E9/PL347 standardized contract):
+ *   planko_agent_claim — the back claim payload with the same names (description, context,
+ *     output, level, sourceId, executorKind, instructions, availableAt, releaseCount,
+ *     recentRejections), never the owner's human instructions
+ *   planko_agent_finish — result, error, claimSeq and an optional runMeta (run summary)
+ *   planko_agent_suggest_subtask — a suggestion the owner accepts or rejects
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';

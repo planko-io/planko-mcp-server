@@ -322,8 +322,10 @@ Runner mode serves the agent that executes Planko **agentic tasks**. It is enabl
 setting `PLANKO_RUNNER_TOKEN` to a runner token generated in the Planko app (screen
 *Agente → Conectar agente*). A runner token:
 
-- belongs to one user and is bound to **one or more projects** of that user — the
-  runner only ever sees that user's queued agentic tasks of those projects;
+- belongs to one user and is one of that user's **agents**: the runner executes the
+  user's queued agentic tasks **whose agent is this runner** (the task's executor). The
+  projects of a runner only make it the default agent suggested for those projects; they
+  do not restrict what it runs, and a task without a project runs too;
 - is **shown once**, when it is created; Planko stores only its hash. Lost token →
   create a new one. Revoking it stops the runner immediately and returns any task it
   was running to the queue.
@@ -333,9 +335,12 @@ CRUD, no folder sync), all authenticated with the runner token:
 
 | Tool | What it does |
 |---|---|
-| `planko_agent_claim` | Long-poll for the oldest queued agentic task (`waitSeconds` 0–25). Returns its id, `claimSeq`, name, project, timeout, instructions (Markdown), the owner's `humanInstructions` (+ `humanInstructionsLabel`, null when empty) and the parent context for a subtask, or `No task available.` |
-| `planko_agent_finish` | Report the result (Markdown) of a claimed task with the `claimSeq` returned by the claim, and `error: true` when it failed. The task goes to validation, or is concluded automatically when its recurring model does not require validation. |
-| `planko_agent_suggest_subtask` | Suggest a subtask (name, Markdown instructions, optional `timeoutMin`) under an agentic task. The owner accepts or rejects it in the app. With `requireHumanInstructions: true` (+ `humanInstructionsLabel`, ≤200 chars, e.g. "Decidir entre A, B, C ou outro") the owner must fill in "Instruções humanas" before accepting — for a decision between options or an instruction only the owner can give. |
+| `planko_agent_claim` | Long-poll for the oldest queued agentic task (`waitSeconds` 0–25), or `No task available.`. Returns the back's standardized payload with the same names: `id`, `claimSeq`, `name`, `projectName`, `timeoutMin`, `description` (the task **Instrução** in Markdown, organized in Contexto/Instrução/Entrega or not), `instructions` (the agent's **basic instructions**, applied before the task instruction — the task wins on conflict; `null` when none), `context.attachments` (`attachmentId`, `name`, `size`, `mime`), `output.suggestSubtasks`, `level`, `sourceId`, `executorKind`, `availableAt`, `releaseCount`, `recentRejections` and `parentContext` (`id`, `name`, `description`). Missing fields from an older back get safe defaults (`[]`, `suggestSubtasks: true`, `null`, `executorKind: "claude_code"`, `0`). There are no "human instructions" any more. |
+| `planko_agent_finish` | Report the result (Markdown) of a claimed task with the `claimSeq` returned by the claim, `error: true` when it failed, and an optional `runMeta` — the run summary shown to the owner (`executorKind`, `model`, `steps`, `inputTokens`, `outputTokens`, `costUsd`, `durationMs`, `queueLatencyMs`, `stoppedBy`, …; unknown keys are refused). The task goes to validation, or is concluded automatically when its recurring model does not require validation. |
+| `planko_agent_suggest_subtask` | Suggest a subtask (name, Markdown instructions, optional `timeoutMin`) under an agentic task. The owner accepts or rejects it in the app. When it depends on a decision only the owner can make, write the question and the options in the description: the owner edits the instruction before accepting. |
+
+**Compatibility:** against a back that does not know `runMeta` yet, `planko_agent_finish`
+sends the result once more without it, so the task still closes (the summary is dropped).
 
 Every error (invalid/revoked token, task outside the token's scope, stale claim) is
 returned as a tool error carrying the HTTP status.
