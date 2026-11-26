@@ -140,6 +140,14 @@ export function createApiClient({ apiKey, apiBase }) {
     },
 
     /**
+     * POST /mcp-project-sync/agent-tasks/suggest — agentic task (type 4) born in
+     * Sugestão; it only runs after the owner accepts it in the app.
+     */
+    async suggestAgentTask(body) {
+      return request('POST', '/mcp-project-sync/agent-tasks/suggest', body);
+    },
+
+    /**
      * POST /mcp-project-sync/recommendations — suggest something to the API
      * key's owner (PL274). Body { type, payload }; returns the Recommendation
      * doc (status 'pending'). The task is only created when the owner accepts.

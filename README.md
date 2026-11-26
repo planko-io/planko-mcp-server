@@ -4,7 +4,7 @@ MCP server for syncing [Planko](https://planko.io) tasks with local Markdown fil
 
 ## Features
 
-- **21 tools**: 3 folder-sync tools + 10 standalone task/note/sticky-note CRUD tools + 7 standalone read (list/view) tools + `planko_recommend_task` (suggest a task for the owner to accept or reject), incl. `planko_list_all` and kanban board/column filters
+- **22 tools**: 3 folder-sync tools + 10 standalone task/note/sticky-note CRUD tools + 7 standalone read (list/view) tools + `planko_recommend_task` (suggest a task for the owner to accept or reject) + `planko_suggest_agentic_task` (suggest a task for one of the owner's agents, accepted on the Agentes page), incl. `planko_list_all` and kanban board/column filters
 - **Type-aware sync**: each folder syncs either **tasks** (type=1) or **notes** (type=2), chosen at setup
 - **Multi-folder**: sync multiple projects to different local folders
 - **Bidirectional sync**: pull remote changes, push local changes
@@ -87,7 +87,7 @@ Tasks are pulled as `.md` files into your folder. Local changes are pushed back 
 
 ## Tools
 
-The server exposes 21 tools in four groups: **folder-sync** tools (bind a project to a local folder), **standalone CRUD** tools (create/edit/complete/delete directly via your API key, no folder needed), **standalone read** tools (list/view directly via your API key, no folder needed), and a **recommendation** tool (suggest a task that the account owner accepts or rejects).
+The server exposes 22 tools in four groups: **folder-sync** tools (bind a project to a local folder), **standalone CRUD** tools (create/edit/complete/delete directly via your API key, no folder needed), **standalone read** tools (list/view directly via your API key, no folder needed), and two **suggestion** tools (suggest a task, or an agentic task, that the account owner accepts or rejects).
 
 Planko has three kinds of item, all stored as tasks with a `type`: **tasks** (`type=1`), **notes** (`type=2`) and **sticky notes** (`type=3`, a task-page item with every task property). Every kind has its own create/edit/delete/view/list tool; `planko_list_all` lists the three together.
 
@@ -171,6 +171,21 @@ Notes:
 - A reference the owner cannot access (`projectId`, `parentId`, `tags`, `boardId`, `kanbanColumnId`) is rejected at send time with a `400`. A reference that becomes stale later is dropped when the owner accepts; the task is still created.
 - There is **no read-back**: the API has no endpoint to list recommendations or learn their outcome, and every call creates a new pending suggestion plus a new notification. Send each suggestion once; do not retry on a slow response.
 - Under `PLANKO_PROJECT_LOCK` the suggestion always targets the locked project (see below).
+
+### Agentic task suggestion
+
+An agentic task is executed by one of the owner's Planko agents from an instruction. The MCP never creates, edits, completes or deletes one; it can only **suggest** one. The suggestion lands in the **Sugestão** column of the Agentes page and nothing runs until the owner accepts it there.
+
+| Tool | Description | Key parameters |
+|---|---|---|
+| `planko_suggest_agentic_task` | Suggest an agentic task to the account owner | `name` (required), `instructions` (required, Markdown, up to 5500 characters once converted), `projectName` (optional), `level` (`baixo`\|`medio`\|`alto`, optional) |
+
+Notes:
+
+- One-off only: no subtasks and no recurrence.
+- The executor is the **default agent of the target project**. A project without one fails with `Escolha o agente que vai executar esta tarefa`; the owner sets it in Planko.
+- Available only to accounts with access to agentic tasks; otherwise the call fails with `403`.
+- Under `PLANKO_PROJECT_LOCK` the suggestion always targets the locked project.
 
 ```
 planko_recommend_task(title: "Renovar contrato Acme", datePlain: "2026-10-01", time: "14:00", priority: 1)

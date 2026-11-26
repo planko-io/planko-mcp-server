@@ -7,6 +7,7 @@ const STANDALONE_TOOLS = [
   'planko_create_note',
   'planko_create_sticky_note',
   'planko_recommend_task',
+  'planko_suggest_agentic_task',
   'planko_edit_task',
   'planko_edit_note',
   'planko_edit_sticky_note',
@@ -69,6 +70,7 @@ function fakeApi(overrides = {}) {
     completeTask: vi.fn(async () => ({ _id: 'abc', name: 'x' })),
     deleteTask: vi.fn(async () => ({})),
     createRecommendation: vi.fn(async () => ({ _id: 'r1', status: 'pending' })),
+    suggestAgentTask: vi.fn(async (body) => ({ _id: 's1', name: body.name, agentStatus: 'sugestao' })),
     listTasks: vi.fn(async () => ({ tasks: [], total: 0 })),
     getTask: vi.fn(async () => ({ _id: 'abc', name: 'x', type: 1 })),
     ...overrides,
@@ -76,11 +78,11 @@ function fakeApi(overrides = {}) {
 }
 
 describe('registerStandaloneTools', () => {
-  it('registers exactly the 18 standalone tools and no sync tools', () => {
+  it('registers exactly the 19 standalone tools and no sync tools', () => {
     const server = fakeServer();
     registerStandaloneTools(server, { api: fakeApi() });
     const names = Object.keys(server.tools);
-    expect(names).toHaveLength(18);
+    expect(names).toHaveLength(19);
     expect(names.sort()).toEqual([...STANDALONE_TOOLS].sort());
     expect(names).not.toContain('planko_setup');
     expect(names).not.toContain('planko_sync');
@@ -119,13 +121,13 @@ describe('registerStandaloneTools', () => {
     }
   });
 
-  it('marks create/edit/recommend as non-destructive writes', () => {
+  it('marks create/edit/recommend/suggest as non-destructive writes', () => {
     const server = fakeServer();
     registerStandaloneTools(server, { api: fakeApi() });
     const writes = STANDALONE_TOOLS.filter(
       (n) => !READ_ONLY.includes(n) && !DESTRUCTIVE.includes(n)
     );
-    expect(writes).toHaveLength(7);
+    expect(writes).toHaveLength(8);
     for (const name of writes) {
       expect(server.tools[name].config.annotations.readOnlyHint).toBe(false);
       expect(server.tools[name].config.annotations.destructiveHint).toBe(false);
@@ -148,7 +150,7 @@ describe('registerStandaloneTools', () => {
       return { ...res, wrappedBy: name };
     });
     registerStandaloneTools(server, { api: fakeApi(), wrapHandler });
-    expect(wrapHandler).toHaveBeenCalledTimes(18);
+    expect(wrapHandler).toHaveBeenCalledTimes(19);
     expect(wrapHandler.mock.calls.map((c) => c[0]).sort()).toEqual([...STANDALONE_TOOLS].sort());
     const res = await server.tools.planko_view_task.handler({ taskId: 'a'.repeat(24) });
     expect(res.wrappedBy).toBe('planko_view_task');
@@ -287,5 +289,50 @@ describe('deadline (PL328)', () => {
     expect(api.listTasks).toHaveBeenCalledWith(
       expect.objectContaining({ deadlineFrom: '2026-01-01', deadlineTo: '2026-01-31' })
     );
+  });
+});
+
+describe('planko_suggest_agentic_task', () => {
+  it('sends the name, the instructions as BlockNote and the level, without a project when omitted', async () => {
+    const server = fakeServer();
+    const api = fakeApi();
+    registerStandaloneTools(server, { api });
+    const res = await server.tools.planko_suggest_agentic_task.handler({
+      name: 'Resumo semanal',
+      instructions: '# Faça\n- resuma os e-mails',
+      level: 'medio',
+    });
+    expect(res.isError).toBeFalsy();
+    const [body] = api.suggestAgentTask.mock.calls[0];
+    expect(body).toEqual({ name: 'Resumo semanal', description: expect.any(String), agentLevel: 'medio' });
+    expect(JSON.parse(body.description)).toBeInstanceOf(Array);
+    expect(res.content[0].text).toMatch(/Sugestão/);
+  });
+
+  it('resolves projectName to projectId', async () => {
+    const server = fakeServer();
+    const api = fakeApi({ projects: vi.fn(async () => ({ projects: [{ _id: 'p'.repeat(24), name: 'Agente' }] })) });
+    registerStandaloneTools(server, { api });
+    await server.tools.planko_suggest_agentic_task.handler({ name: 'x', instructions: 'y', projectName: 'agente' });
+    expect(api.suggestAgentTask).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'p'.repeat(24) }));
+  });
+
+  it('always targets the locked project under a project lock', async () => {
+    const server = fakeServer();
+    const api = fakeApi();
+    const lock = 'l'.repeat(24);
+    registerStandaloneTools(server, { api, projectLock: lock });
+    await server.tools.planko_suggest_agentic_task.handler({ name: 'x', instructions: 'y', projectName: 'Outro' });
+    expect(api.suggestAgentTask).toHaveBeenCalledWith(expect.objectContaining({ projectId: lock }));
+    expect(api.projects).not.toHaveBeenCalled();
+  });
+
+  it('returns a tool error with the backend message', async () => {
+    const server = fakeServer();
+    const api = fakeApi({ suggestAgentTask: vi.fn(async () => { throw new Error('Escolha o agente que vai executar esta tarefa'); }) });
+    registerStandaloneTools(server, { api });
+    const res = await server.tools.planko_suggest_agentic_task.handler({ name: 'x', instructions: 'y' });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toBe('Suggest agentic task failed: Escolha o agente que vai executar esta tarefa');
   });
 });

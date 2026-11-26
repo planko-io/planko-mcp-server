@@ -386,6 +386,53 @@ export function registerStandaloneTools(server, { api, projectLock = null, wrapH
     })
   );
 
+  // ---- planko_suggest_agentic_task ----
+  // An agentic task (type 4, run by one of the owner's agents) in Sugestão: nothing runs until the
+  // owner accepts it on the Agentes page. One-off only (no parent, no recurrence); the executor is
+  // the project's default agent. Every other agentic write stays closed to the MCP.
+  server.registerTool(
+    'planko_suggest_agentic_task',
+    {
+      title: 'Suggest agentic task',
+      description: 'Suggest an agentic task: a task that one of the owner\'s Planko agents executes from an instruction. It is created in the "Sugestão" column of the Agentes page and runs only after the owner accepts it there; nothing executes before that. One-off only (no subtasks, no recurrence). The executor is the default agent of the target project; if the project has none, the call fails and the owner must pick a default agent for it in Planko. Send each suggestion once.',
+      inputSchema: {
+        name: z.string().trim().min(1).max(200).describe('Task name (required, up to 200 characters)'),
+        instructions: z
+          .string()
+          .trim()
+          .min(1)
+          .describe('What the agent must do (required, Markdown; up to 5500 characters once converted)'),
+        projectName: z
+          .string()
+          .optional()
+          .describe('Project name (optional — omit for your default project). Its default agent executes the task'),
+        level: z
+          .enum(['baixo', 'medio', 'alto'])
+          .optional()
+          .describe('Model level for the run (optional — omit for the agent\'s default level)'),
+      },
+      annotations: ANNOTATIONS.WRITE,
+    },
+    wrapHandler('planko_suggest_agentic_task', async (params) => {
+      try {
+        const body = { name: params.name, description: markdownToDescription(params.instructions) };
+        if (params.level) body.agentLevel = params.level;
+        if (PROJECT_LOCK) {
+          body.projectId = lockProjectId(PROJECT_LOCK, undefined);
+        } else if (!isBlankValue(params.projectName)) {
+          body.projectId = await resolveProjectId(params.projectName);
+        }
+        const res = await api.suggestAgentTask(body);
+        const { id, name: savedName } = describeTask(res);
+        return toolOk(
+          `Suggested agentic task "${savedName}" (id: ${id}). It is in "Sugestão" on the Agentes page and runs only after the owner accepts it.`
+        );
+      } catch (err) {
+        return toolError(`Suggest agentic task failed: ${err.message}`);
+      }
+    })
+  );
+
   // ---- planko_edit_task ----
   server.registerTool(
     'planko_edit_task',
